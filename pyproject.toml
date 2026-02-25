@@ -1,0 +1,5 @@
+[tool.basedpyright]
+typeCheckingMode = "standard"
+pythonVersion = "3.12.10"
+reportUnusedImport = true
+reportMissingTypeStubs = true

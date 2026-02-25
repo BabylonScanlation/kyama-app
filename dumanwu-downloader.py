@@ -16,14 +16,14 @@ import shutil
 import sys
 import time
 import zipfile
-import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
-from urllib.parse import quote, urljoin
+from urllib.parse import quote
 
 import requests
 from scrapling import Selector
 
+HAS_PILLOW: bool
 try:
     from PIL import Image
 
@@ -88,7 +88,7 @@ class UI:
         os.system("cls" if os.name == "nt" else "clear")
         print(f"{UI.BLUE}╔══════════════════════════════════════╗")
         print(f"║ {UI.BOLD}DUMANWU DOWNLOADER v5.3{UI.END}{UI.BLUE}            ║")
-        print(f"║ Decryptor Inteligente (Cap 2 Fix)    ║")
+        print("║ Decryptor Inteligente (Cap 2 Fix)    ║")
         print(f"╚══════════════════════════════════════╝{UI.END}")
 
 
@@ -112,7 +112,7 @@ def _any_to_int(token, b):
         base = int(b)
         for ch in token:
             n = n * base + chars.index(ch)
-    except:
+    except (ValueError, IndexError):
         return -1
     return n
 
@@ -146,7 +146,7 @@ def _extract_packer_args(script):
         # Los argumentos clave suelen ser los 4 primeros tras el }(
         if len(extracted) >= 4:
             return extracted[0], extracted[1], extracted[2], extracted[3]
-    except:
+    except (ValueError, IndexError):
         pass
     return None
 
@@ -165,7 +165,9 @@ def _decrypt_images(html):
             decoded = _decode_packer(p, base, count, k)
 
             # Buscamos la variable con el string Base64 largo (puede ser comilla simple o doble)
-            m_var = re.search(r"var\s+[a-zA-Z0-9_]+\s*=\s*['\"]([^'\"]{100,})['\"]", decoded)
+            m_var = re.search(
+                r"var\s+[a-zA-Z0-9_]+\s*=\s*['\"]([^'\"]{100,})['\"]", decoded
+            )
             if not m_var:
                 continue
 
@@ -185,16 +187,20 @@ def _decrypt_images(html):
                             try:
                                 data = json.loads(final_json)
                                 if isinstance(data, list):
-                                    extracted = [str(u) for u in data if "http" in str(u)]
+                                    extracted = [
+                                        str(u) for u in data if "http" in str(u)
+                                    ]
                                     if extracted:
                                         return extracted
-                            except:
-                                urls = re.findall(r"https?://[^\s\"',\[\]]+", final_json)
+                            except Exception:
+                                urls = re.findall(
+                                    r"https?://[^\s\"',\[\]]+", final_json
+                                )
                                 if urls:
                                     return urls
-                    except:
+                    except Exception:
                         continue
-            except:
+            except Exception:
                 continue
     return []
 
@@ -209,13 +215,10 @@ class DumanwuLogic:
         sel = Selector(r.text, url=url)
         h1 = sel.css("h1").first
         title = (h1.text if h1 and h1.text else slug).strip()
-        autor = (
-            (
-                re.search(r"作者[：:]\s*([^\s<\n，,]+)", r.text) or re.search("", "")
-            ).group(1)
-            if re.search(r"作者[：:]\s*([^\s<\n，,]+)", r.text)
-            else ""
-        )
+
+        m_autor = re.search(r"作者[：:]\s*([^\s<\n，,]+)", r.text)
+        autor = m_autor.group(1) if m_autor else ""
+
         sinopsis = ""
         for p in sel.css("p"):
             t = p.get_all_text().strip()
@@ -287,7 +290,7 @@ class DumanwuLogic:
 
     def extract_images(self, cap: dict) -> list:
         html = cap.get("html")
-        
+
         if not html or "eval(function(p,a,c,k,e,d)" not in html:
             html = None
             for attempt in range(3):
@@ -300,29 +303,39 @@ class DumanwuLogic:
                         time.sleep(attempt + 1)
                 except Exception:
                     time.sleep(attempt + 1)
-                    
+
         if not html:
             return []
-    
+
         # 1. Intentar DESCIFRAR el packer (Contenido Real del Capítulo)
-        packer_urls = _decrypt_images(html)
+        packer_urls: list[str] = _decrypt_images(html)
         if packer_urls:
             # Filtrar portadas genéricas de otras series
-            real_content = [u for u in packer_urls if "scl3phc04j" not in u and "/static/" not in u.lower()]
+            real_content = [
+                u
+                for u in packer_urls
+                if "scl3phc04j" not in u and "/static/" not in u.lower()
+            ]
             if real_content:
                 return real_content
 
         # 2. Fallback al HTML (regex directo de data-src o src)
         urls, seen = [], set()
         # Buscamos data-src, src, o data-original
-        for pattern in [r'data-src="(https?://[^"]+)"', r'src="(https?://[^"]+)"', r'data-original="(https?://[^"]+)"']:
+        for pattern in [
+            r'data-src="(https?://[^"]+)"',
+            r'src="(https?://[^"]+)"',
+            r'data-original="(https?://[^"]+)"',
+        ]:
             for m in re.finditer(pattern, html):
                 src = m.group(1)
-                is_junk = any(p in src.lower() for p in _UI_PATHS) or "scl3phc04j" in src
+                is_junk = (
+                    any(p in src.lower() for p in _UI_PATHS) or "scl3phc04j" in src
+                )
                 if src not in seen and not is_junk:
                     seen.add(src)
                     urls.append(src)
-            if len(urls) > 5: # Si encontramos bastantes con un patrón, paramos
+            if len(urls) > 5:  # Si encontramos bastantes con un patrón, paramos
                 break
 
         return urls
@@ -332,7 +345,7 @@ class DumanwuLogic:
         try:
             r = SESSION.get(url, timeout=10)
             sel = Selector(r.text, url=url)
-        except:
+        except Exception:
             return []
         results, seen = [], set()
         for a in sel.css("a[href]"):
@@ -379,7 +392,7 @@ def dl_worker(args):
     path = f"{folder}/{idx + 1:03d}.{ext}"
     if os.path.exists(path):
         return True
-        
+
     for attempt in range(2):
         try:
             r = SESSION.get(url, timeout=(5, 10))
@@ -399,6 +412,7 @@ def download_series(slug: str, logic: DumanwuLogic, selection: str):
         return
 
     print(f"\n{UI.GREEN}[+] {UI.BOLD}{title}{UI.END}")
+
     sel_indices = []
     if selection.lower() == "all":
         sel_indices = list(range(len(chapters)))
@@ -408,7 +422,7 @@ def download_series(slug: str, logic: DumanwuLogic, selection: str):
                 try:
                     a, b = map(int, part.split("-"))
                     sel_indices.extend(range(a - 1, b))
-                except:
+                except Exception:
                     pass
             elif part.isdigit():
                 sel_indices.append(int(part) - 1)
@@ -418,20 +432,23 @@ def download_series(slug: str, logic: DumanwuLogic, selection: str):
         print(f"{UI.RED}[!] Selección vacía.{UI.END}")
         return
 
-    base_folder = f"{re.sub(r'[\\/:*?\"<>|]', '', title).strip()} [{slug}]"
+    clean_slug = re.sub(r"[\\/:*?\"<>|]", "", title).strip()
+    base_folder = f"{clean_slug} [{slug}]"
     if not os.path.exists(base_folder):
         os.makedirs(base_folder)
 
     total_valid = 0
     for i, cap in enumerate(to_dl):
-        print(f"  [{i + 1}/{len(to_dl)}] {cap['title']}...", end=" ", flush=True)
+        cap_title = cap.get("title", "Capítulo")
+        print(f"  [{i + 1}/{len(to_dl)}] {cap_title}...", end=" ", flush=True)  # type: ignore
         imgs = logic.extract_images(cap)
         if not imgs:
             print(f"{UI.RED}0 imgs{UI.END}")
             continue
         print()
 
-        c_folder = os.path.join(base_folder, f"Cap_{i + 1:03d}_{cap['slug']}")
+        cap_slug = cap.get("slug", str(i))
+        c_folder = os.path.join(base_folder, f"Cap_{i + 1:03d}_{cap_slug}")  # type: ignore
         if not os.path.exists(c_folder):
             os.makedirs(c_folder)
 

@@ -129,12 +129,12 @@ class ToonkorLogic:
         meta = page.css('meta[name="description"]').first
         if meta:
             content = meta.attrib.get("content", "").strip()
-            m = re.search(
+            m_meta = re.search(
                 r"작가\s+(.+?)\s+총편수\s+총\s+\d+화\s*(.*)", content, re.DOTALL
             )
-            if m:
-                autor = m.group(1).strip()
-                sinopsis = m.group(2).strip()[:500]
+            if m_meta:
+                autor = m_meta.group(1).strip()
+                sinopsis = m_meta.group(2).strip()[:500]
             else:
                 sinopsis = content[:500]
 

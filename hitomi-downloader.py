@@ -3,7 +3,6 @@ import os
 import re
 import struct
 import sys
-import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,6 +11,7 @@ from io import BytesIO
 import requests
 
 # --- SOPORTE PARA PILLOW ---
+HAS_PILLOW: bool
 try:
     from PIL import Image
 
@@ -68,23 +68,29 @@ class HitomiLogic:
             body = requests.get(
                 "https://ltn.gold-usergeneratedcontent.net/gg.js", timeout=10
             ).text
-            self.m_default = int(re.search(r"var o = (\d)", body).group(1))
+
+            m_o = re.search(r"var o = (\d)", body)
+            self.m_default = int(m_o.group(1)) if m_o else 0
+
             o_match = re.search(r"o = (\d); break;", body)
             o_val = int(o_match.group(1)) if o_match else self.m_default
             for c in re.findall(r"case (\d+):", body):
                 self.m_map[int(c)] = o_val
-            self.b_val = re.search(r"b: '(.+)'", body).group(1)
-            if not self.b_val.endswith("/"):
+
+            m_b = re.search(r"b: '(.+)'", body)
+            self.b_val = m_b.group(1) if m_b else ""
+
+            if self.b_val and not self.b_val.endswith("/"):
                 self.b_val += "/"
-        except:
+        except Exception:
             print(f"{UI.RED}[!] Error cargando gg.js. URLs podrían fallar.{UI.END}")
 
-    def get_url(self, h, ext):
+    def get_url(self, h: str, ext: str):
         # Lógica de common.rs: reordenar hash para el subdominio
         g = int(h[-1] + h[-3:-1], 16) if h else 0
         m = self.m_map.get(g, self.m_default)
         sub = f"{'a' if ext == 'avif' else 'w'}{1 + m}"
-        return f"https://{sub}.gold-usergeneratedcontent.net/{self.b_val}{g}/{h}.{ext}"
+        return f"https://{sub}.gold-usergeneratedcontent.net/{self.b_val}{g}/{h}.{ext}"  # type: ignore
 
 
 # --- FUNCIONES DE APOYO ---
@@ -107,7 +113,7 @@ def parse_sel(selection_str, max_len):
                 idx = int(part) - 1
                 if 0 <= idx < max_len:
                     indices.add(idx)
-    except:
+    except Exception:
         pass
     return sorted(list(indices))
 
@@ -134,7 +140,7 @@ def fetch_nozomi_ids(term):
             struct.unpack(">i", r.content[i * 4 : (i + 1) * 4])[0]
             for i in range(len(r.content) // 4)
         }
-    except:
+    except Exception:
         return set()
 
 
@@ -171,7 +177,7 @@ def save_img(raw, path, fmt):
             bg.paste(img, img.split()[-1])
             img = bg.convert("RGB")
         img.save(path, quality=92)
-    except:
+    except Exception:
         with open(path, "wb") as f:
             f.write(raw)
 
@@ -192,7 +198,7 @@ def dl_worker(args):
             if r.status_code == 200:
                 save_img(r.content, path, USER_FORMAT)
                 return True
-        except:
+        except Exception:
             time.sleep(1)
     return False
 
@@ -336,7 +342,7 @@ def main():
                             METADATA_CACHE[gi] = json.loads(
                                 r.text.split("var galleryinfo = ")[1]
                             )
-                        except:
+                        except Exception:
                             pass
 
                     with ThreadPoolExecutor(max_workers=20) as exe:
