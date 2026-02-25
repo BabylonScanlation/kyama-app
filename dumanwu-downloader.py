@@ -1,11 +1,6 @@
 """
 DUMANWU DOWNLOADER v5.3
 100% requests — Decryptor Inteligente (Fix Chapter 2)
-
-Sistema de extracción:
-  1. Extrae y descifra el script 'packer' con soporte para argumentos variables.
-  2. Descifra los datos usando 10 semillas XOR maestras (HEX).
-  3. Prioriza el contenido del packer sobre el HTML para evitar basura.
 """
 
 import base64
@@ -18,35 +13,37 @@ import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
+from typing import Any, cast
 from urllib.parse import quote
 
 import requests
 from scrapling import Selector
 
-HAS_PILLOW: bool
+has_pillow: bool
 try:
     from PIL import Image
 
-    HAS_PILLOW = True
+    has_pillow = True
 except ImportError:
-    HAS_PILLOW = False
+    Image = None  # type: ignore
+    has_pillow = False
 
 # ─── CONFIGURACIÓN ─────────────────────────────────────────────────────────────
-BASE_URL = "https://dumanwu.com"
-OUTPUT_TYPE = "zip"
-USER_FORMAT = "webp"  # 'original' | 'jpg' | 'png' | 'webp'
-MAX_WORKERS_DL = 10
-DELETE_TEMP = True
-MIN_IMAGE_SIZE_KB = 5
+BASE_URL: str = "https://dumanwu.com"
+OUTPUT_TYPE: str = "zip"
+USER_FORMAT: str = "webp"  # 'original' | 'jpg' | 'png' | 'webp'
+MAX_WORKERS_DL: int = 10
+DELETE_TEMP: bool = True
+MIN_IMAGE_SIZE_KB: int = 5
 
-HEADERS = {
+HEADERS: dict[str, str] = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
     "Referer": BASE_URL + "/",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
 
 # Semillas XOR en HEX (Extraídas de all2.js)
-SEEDS_HEX = [
+SEEDS_HEX: list[str] = [
     "736d6b6879323538",
     "736d6b6439356676",
     "6d64343936393532",
@@ -59,7 +56,7 @@ SEEDS_HEX = [
     "356b6f36706c6879",
 ]
 
-_UI_PATHS = (
+_UI_PATHS: tuple[str, ...] = (
     "/static/",
     "load.gif",
     "logo.png",
@@ -73,19 +70,19 @@ _UI_PATHS = (
 
 # ─── UI ───────────────────────────────────────────────────────────────────────
 class UI:
-    CYAN = "\033[96m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    BOLD = "\033[1m"
-    END = "\033[0m"
+    CYAN: str = "\033[96m"
+    GREEN: str = "\033[92m"
+    YELLOW: str = "\033[93m"
+    RED: str = "\033[91m"
+    BOLD: str = "\033[1m"
+    END: str = "\033[0m"
 
-    PURPLE = "\033[95m"
-    BLUE = "\033[94m"
+    PURPLE: str = "\033[95m"
+    BLUE: str = "\033[94m"
 
     @staticmethod
-    def header():
-        os.system("cls" if os.name == "nt" else "clear")
+    def header() -> None:
+        _ = os.system("cls" if os.name == "nt" else "clear")
         print(f"{UI.BLUE}╔══════════════════════════════════════╗")
         print(f"║ {UI.BOLD}DUMANWU DOWNLOADER v5.3{UI.END}{UI.BLUE}            ║")
         print("║ Decryptor Inteligente (Cap 2 Fix)    ║")
@@ -93,23 +90,23 @@ class UI:
 
 
 # ─── SESIÓN ────────────────────────────────────────────────────────────────────
-SESSION = requests.Session()
+SESSION: requests.Session = requests.Session()
 SESSION.headers.update(HEADERS)
 
 
 # ─── LÓGICA DE DESCIFRADO ──────────────────────────────────────────────────────
-def _xor_decrypt(data, key_bytes):
+def _xor_decrypt(data: bytes, key_bytes: bytes) -> bytes:
     res = bytearray()
     for i in range(len(data)):
         res.append(data[i] ^ key_bytes[i % len(key_bytes)])
     return bytes(res)
 
 
-def _any_to_int(token, b):
-    chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    n = 0
+def _any_to_int(token: str, b: str | int) -> int:
+    chars: str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    n: int = 0
     try:
-        base = int(b)
+        base: int = int(b)
         for ch in token:
             n = n * base + chars.index(ch)
     except (ValueError, IndexError):
@@ -117,12 +114,12 @@ def _any_to_int(token, b):
     return n
 
 
-def _decode_packer(p, base, count, k_str):
-    keys = k_str.split("|")
+def _decode_packer(p: str, base: int, _count: int, k_str: str) -> str:
+    keys: list[str] = k_str.split("|")
 
-    def replace_token(m):
-        tok = m.group(0)
-        idx = _any_to_int(tok, base)
+    def replace_token(m: Any) -> str:  # pyright: ignore[reportAny, reportExplicitAny]
+        tok: str = m.group(0)  # pyright: ignore[reportAny]
+        idx: int = _any_to_int(tok, base)
         if 0 <= idx < len(keys) and keys[idx]:
             return keys[idx]
         return tok
@@ -130,14 +127,14 @@ def _decode_packer(p, base, count, k_str):
     return re.sub(r"\b[0-9A-Za-z]+\b", replace_token, p)
 
 
-def _extract_packer_args(script):
+def _extract_packer_args(script: str) -> Any:  # pyright: ignore[reportAny, reportExplicitAny]
     try:
         # Busca el bloque de argumentos: ('p',a,c,'k'...)
-        start_idx = script.rindex("}(") + 2
-        args_part = script[start_idx:]
+        start_idx: int = script.rindex("}(") + 2
+        args_part: str = script[start_idx:]
         # Captura strings o números
-        matches = re.findall(r"'((?:[^'\\]|\\.)*)'|(\d+)", args_part)
-        extracted = []
+        matches: list[tuple[str, str]] = re.findall(r"'((?:[^'\\]|\\.)*)'|(\d+)", args_part)
+        extracted: list[Any] = []  # pyright: ignore[reportExplicitAny]
         for s_val, n_val in matches:
             if n_val:
                 extracted.append(int(n_val))
@@ -145,24 +142,24 @@ def _extract_packer_args(script):
                 extracted.append(s_val)
         # Los argumentos clave suelen ser los 4 primeros tras el }(
         if len(extracted) >= 4:
-            return extracted[0], extracted[1], extracted[2], extracted[3]
+            return str(extracted[0]), int(extracted[1]), int(extracted[2]), str(extracted[3])  # pyright: ignore[reportAny]
     except (ValueError, IndexError):
         pass
     return None
 
 
-def _decrypt_images(html):
-    scripts = re.findall(
+def _decrypt_images(html: str) -> list[str]:
+    scripts: list[str] = re.findall(
         r"<script[^>]*>(.*?)</script>", html, re.DOTALL | re.IGNORECASE
     )
     for script in scripts:
         if "eval(function(p,a,c,k,e,d)" in script:
-            res = _extract_packer_args(script)
+            res: Any = _extract_packer_args(script)  # pyright: ignore[reportAny, reportExplicitAny]
             if not res:
                 continue
 
-            p, base, count, k = res
-            decoded = _decode_packer(p, base, count, k)
+            p, base, count, k = res  # pyright: ignore[reportAny]
+            decoded: str = _decode_packer(p, base, count, k)  # pyright: ignore[reportAny]
 
             # Buscamos la variable con el string Base64 largo (puede ser comilla simple o doble)
             m_var = re.search(
@@ -171,29 +168,31 @@ def _decrypt_images(html):
             if not m_var:
                 continue
 
-            data_enc = m_var.group(1)
+            data_enc: str = m_var.group(1)
             try:
-                pad = (4 - len(data_enc) % 4) % 4
-                raw_data = base64.b64decode(data_enc + "=" * pad)
+                pad: int = (4 - len(data_enc) % 4) % 4
+                raw_data: bytes = base64.b64decode(data_enc + "=" * pad)
                 for s_hex in SEEDS_HEX:
                     try:
-                        key = bytes.fromhex(s_hex)
-                        xor_res = _xor_decrypt(raw_data, key)
-                        pad_xor = (4 - len(xor_res) % 4) % 4
-                        final_json = base64.b64decode(xor_res + b"=" * pad_xor).decode(
+                        key: bytes = bytes.fromhex(s_hex)
+                        xor_res: bytes = _xor_decrypt(raw_data, key)
+                        pad_xor: int = (4 - len(xor_res) % 4) % 4
+                        final_json: str = base64.b64decode(xor_res + b"=" * pad_xor).decode(
                             "utf-8", errors="ignore"
                         )
                         if "http" in final_json:
                             try:
-                                data = json.loads(final_json)
+                                data: Any = json.loads(final_json)  # pyright: ignore[reportAny, reportExplicitAny]
                                 if isinstance(data, list):
-                                    extracted = [
-                                        str(u) for u in data if "http" in str(u)
-                                    ]
+                                    extracted: list[str] = []
+                                    for u in cast(list[Any], data):  # pyright: ignore[reportAny, reportExplicitAny]
+                                        u_str: str = str(u)  # pyright: ignore[reportAny]
+                                        if "http" in u_str:
+                                            extracted.append(u_str)
                                     if extracted:
                                         return extracted
                             except Exception:
-                                urls = re.findall(
+                                urls: list[str] = re.findall(
                                     r"https?://[^\s\"',\[\]]+", final_json
                                 )
                                 if urls:
@@ -207,24 +206,26 @@ def _decrypt_images(html):
 
 # ─── LÓGICA PRINCIPAL ─────────────────────────────────────────────────────────
 class DumanwuLogic:
-    def parse_series_page(self, slug: str):
-        url = f"{BASE_URL}/{slug}/"
-        r = SESSION.get(url, timeout=15)
+    def parse_series_page(self, slug: str) -> tuple[str, str, str, list[dict[str, Any]]]:  # pyright: ignore[reportExplicitAny]
+        url: str = f"{BASE_URL}/{slug}/"
+        r: requests.Response = SESSION.get(url, timeout=15)
         if r.status_code != 200:
             return slug, "", "", []
-        sel = Selector(r.text, url=url)
+        sel: Selector = Selector(r.text, url=url)
         h1 = sel.css("h1").first
-        title = (h1.text if h1 and h1.text else slug).strip()
+        title: str = (h1.text if h1 and h1.text else slug).strip()
 
-        m_autor = re.search(r"作者[：:]\s*([^\s<\n，,]+)", r.text)
-        autor = m_autor.group(1) if m_autor else ""
+        m_autor: Any = re.search(r"作者[：:]\s*([^\s<\n，,]+)", r.text)  # pyright: ignore[reportExplicitAny]
+        _autor: str = m_autor.group(1) if m_autor else ""  # pyright: ignore[reportAny]
 
-        sinopsis = ""
+        _sinopsis: str = ""
         for p in sel.css("p"):
-            t = p.get_all_text().strip()
-            if len(t) > 40 and "作者" not in t and "更新" not in t:
-                sinopsis = t[:600]
-                break
+            t: Any = p.get_all_text()  # pyright: ignore[reportExplicitAny, reportUnknownMemberType]
+            if t and isinstance(t, str):
+                t_clean = t.strip()
+                if len(t_clean) > 40 and "作者" not in t_clean and "更新" not in t_clean:
+                    _sinopsis = t_clean[:600]
+                    break
 
         print(
             f"  {UI.CYAN}[*] Obteniendo índice de capítulos...{UI.END}",
@@ -232,28 +233,30 @@ class DumanwuLogic:
             flush=True,
         )
 
-        slug_esc = re.escape(slug)
-        cap_re = re.compile(rf"/{slug_esc}/([A-Za-z0-9]+)\.html", re.I)
+        slug_esc: str = re.escape(slug)
+        cap_re: Any = re.compile(rf"/{slug_esc}/([A-Za-z0-9]+)\.html", re.I)  # pyright: ignore[reportExplicitAny]
 
-        caps = []
-        seen = set()
+        caps: list[dict[str, Any]] = []  # pyright: ignore[reportExplicitAny]
+        seen: set[str] = set()
 
         # 1. Obtener los capítulos iniciales del HTML
         for a in sel.css("a[href]"):
-            href = a.attrib.get("href", "")
-            m = cap_re.search(href)
+            attribs: dict[str, str] = cast(Any, a.attrib)  # pyright: ignore[reportAny, reportExplicitAny]
+            href: str = attribs.get("href", "")
+            m: re.Match[str] | None = cap_re.search(href)  # pyright: ignore[reportAny]
             if m:
-                cap_slug = m.group(1)
+                cap_slug: str = m.group(1)
+                a_text: str = a.text or ""
                 if (
                     cap_slug not in seen
-                    and "阅读" not in a.text
-                    and "start" not in a.text.lower()
+                    and "阅读" not in a_text
+                    and "start" not in a_text.lower()
                 ):
                     seen.add(cap_slug)
                     caps.append(
                         {
                             "slug": cap_slug,
-                            "title": a.text.strip() or cap_slug,
+                            "title": a_text.strip() or cap_slug,
                             "url": f"{BASE_URL}{href}",
                             "html": None,
                         }
@@ -261,22 +264,28 @@ class DumanwuLogic:
 
         # 2. Consultar la API interna de Dumanwu para obtener el resto de los capítulos al instante
         try:
-            r2 = SESSION.post(f"{BASE_URL}/morechapter", data={"id": slug}, timeout=10)
+            r2: requests.Response = SESSION.post(f"{BASE_URL}/morechapter", data={"id": slug}, timeout=10)
             if r2.status_code == 200:
-                data = r2.json()
-                if data.get("code") == "200" and "data" in data:
-                    for item in data["data"]:
-                        cap_slug = item.get("chapterid")
-                        if cap_slug and cap_slug not in seen:
-                            seen.add(cap_slug)
-                            caps.append(
-                                {
-                                    "slug": cap_slug,
-                                    "title": item.get("chaptername", cap_slug),
-                                    "url": f"{BASE_URL}/{slug}/{cap_slug}.html",
-                                    "html": None,
-                                }
-                            )
+                data: Any = r2.json()  # pyright: ignore[reportAny, reportExplicitAny]
+                if isinstance(data, dict) and data.get("code") == "200" and "data" in data:  # pyright: ignore[reportUnknownMemberType]
+                    data_list: list[Any] = cast(list[Any], data["data"])  # pyright: ignore[reportExplicitAny]
+                    for item in data_list:  # pyright: ignore[reportAny]
+                        if isinstance(item, dict):
+                            d_item: dict[str, Any] = cast(dict[str, Any], item)  # pyright: ignore[reportExplicitAny]
+                            cid: Any = d_item.get("chapterid")  # pyright: ignore[reportExplicitAny]
+                            cname: Any = d_item.get("chaptername")  # pyright: ignore[reportExplicitAny]
+                            if cid and str(cid) not in seen:  # pyright: ignore[reportAny]
+                                cap_slug_v: str = str(cid)  # pyright: ignore[reportAny]
+                                cap_title_v: str = str(cname) if cname else cap_slug_v  # pyright: ignore[reportAny]
+                                seen.add(cap_slug_v)
+                                caps.append(
+                                    {
+                                        "slug": cap_slug_v,
+                                        "title": cap_title_v,
+                                        "url": f"{BASE_URL}/{slug}/{cap_slug_v}.html",
+                                        "html": None,
+                                    }
+                                )
         except Exception:
             pass
 
@@ -286,16 +295,17 @@ class DumanwuLogic:
         print(
             f"\r  {UI.GREEN}[OK] {len(caps)} capítulos descubiertos al instante.{' ' * 10}{UI.END}"
         )
-        return title, autor, sinopsis, caps
+        return title, _autor, _sinopsis, caps
 
-    def extract_images(self, cap: dict) -> list:
-        html = cap.get("html")
+    def extract_images(self, cap: dict[str, Any]) -> list[str]:  # pyright: ignore[reportExplicitAny]
+        html: str | None = str(cap.get("html")) if cap.get("html") else None
 
         if not html or "eval(function(p,a,c,k,e,d)" not in html:
             html = None
+            cap_url = str(cap.get("url", ""))  # pyright: ignore[reportAny]
             for attempt in range(3):
                 try:
-                    r = SESSION.get(cap["url"], timeout=15)
+                    r: requests.Response = SESSION.get(cap_url, timeout=15)
                     if r.status_code == 200 and "eval(function(p,a,c,k,e,d)" in r.text:
                         html = r.text
                         break
@@ -320,7 +330,8 @@ class DumanwuLogic:
                 return real_content
 
         # 2. Fallback al HTML (regex directo de data-src o src)
-        urls, seen = [], set()
+        urls: list[str] = []
+        seen_urls: set[str] = set()
         # Buscamos data-src, src, o data-original
         for pattern in [
             r'data-src="(https?://[^"]+)"',
@@ -328,74 +339,77 @@ class DumanwuLogic:
             r'data-original="(https?://[^"]+)"',
         ]:
             for m in re.finditer(pattern, html):
-                src = m.group(1)
-                is_junk = (
+                src: str = m.group(1)
+                is_junk: bool = (
                     any(p in src.lower() for p in _UI_PATHS) or "scl3phc04j" in src
                 )
-                if src not in seen and not is_junk:
-                    seen.add(src)
+                if src not in seen_urls and not is_junk:
+                    seen_urls.add(src)
                     urls.append(src)
             if len(urls) > 5:  # Si encontramos bastantes con un patrón, paramos
                 break
 
         return urls
 
-    def search(self, query: str) -> list:
-        url = f"{BASE_URL}/search/?keywords={quote(query)}"
+    def search(self, query: str) -> list[dict[str, str]]:
+        url: str = f"{BASE_URL}/search/?keywords={quote(query)}"
         try:
-            r = SESSION.get(url, timeout=10)
-            sel = Selector(r.text, url=url)
+            r: requests.Response = SESSION.get(url, timeout=10)
+            sel: Selector = Selector(r.text, url=url)
         except Exception:
             return []
-        results, seen = [], set()
+        results: list[dict[str, str]] = []
+        seen: set[str] = set()
         for a in sel.css("a[href]"):
-            href = a.attrib.get("href", "").strip("/")
-            title = a.text.strip()
+            attribs: dict[str, str] = cast(Any, a.attrib)  # pyright: ignore[reportAny, reportExplicitAny]
+            href: str = attribs.get("href", "")
+            href_str: str = href.strip("/")
+            title: str = (a.text or "").strip()
             if (
-                re.fullmatch(r"[A-Za-z0-9]{5,12}", href)
-                and href not in seen
+                re.fullmatch(r"[A-Za-z0-9]{5,12}", href_str)
+                and href_str not in seen
                 and title
                 and len(title) > 1
                 and not title.isdigit()
             ):
-                seen.add(href)
-                results.append({"slug": href, "title": title})
+                seen.add(href_str)
+                results.append({"slug": href_str, "title": title})
         return results
 
 
 # ─── DESCARGA ──────────────────────────────────────────────────────────────────
-def save_img(raw: bytes, path: str, fmt: str):
-    if not HAS_PILLOW or fmt == "original":
+def save_img(raw: bytes, path: str, fmt: str) -> None:
+    if not has_pillow or fmt == "original" or Image is None:
         with open(path, "wb") as f:
-            f.write(raw)
+            _ = f.write(raw)
         return
     try:
-        img = Image.open(BytesIO(raw))
-        if fmt.lower() in ("jpg", "jpeg") and img.mode in ("RGBA", "LA"):
-            bg = Image.new(img.mode[:-1], img.size, (255, 255, 255))
-            bg.paste(img, img.split()[-1])
-            img = bg.convert("RGB")
-        img.save(path, quality=92)
+        img: Any = Image.open(BytesIO(raw))  # pyright: ignore[reportExplicitAny]
+        if fmt.lower() in ("jpg", "jpeg") and img.mode in ("RGBA", "LA"):  # pyright: ignore[reportAny]
+            bg: Any = Image.new(img.mode[:-1], img.size, (255, 255, 255))  # pyright: ignore[reportAny, reportExplicitAny]
+            _ = bg.paste(img, img.split()[-1])  # pyright: ignore[reportAny]
+            img = bg.convert("RGB")  # pyright: ignore[reportAny]
+        _ = img.save(path, quality=92)  # pyright: ignore[reportAny]
     except Exception:
         with open(path, "wb") as f:
-            f.write(raw)
+            _ = f.write(raw)
 
 
-def dl_worker(args):
+def dl_worker(args: tuple[str, str, int]) -> bool:
     url, folder, idx = args
 
-    ext = USER_FORMAT if (HAS_PILLOW and USER_FORMAT != "original") else "jpg"
-    url_ext = os.path.splitext(url.split("?")[0])[-1].lower().lstrip(".")
+    ext: str = USER_FORMAT if (has_pillow and USER_FORMAT != "original") else "jpg"
+    url_ext: str = os.path.splitext(url.split("?")[0])[-1].lower().lstrip(".")
     if url_ext in ("jpg", "jpeg", "png", "webp", "gif"):
         ext = url_ext
 
-    path = f"{folder}/{idx + 1:03d}.{ext}"
+    path: str = f"{folder}/{idx + 1:03d}.{ext}"
     if os.path.exists(path):
         return True
 
     for attempt in range(2):
         try:
-            r = SESSION.get(url, timeout=(5, 10))
+            r: requests.Response = SESSION.get(url, timeout=(5, 10))
             if r.status_code == 200 and len(r.content) > MIN_IMAGE_SIZE_KB * 1024:
                 save_img(r.content, path, USER_FORMAT)
                 return True
@@ -404,56 +418,57 @@ def dl_worker(args):
     return False
 
 
-def download_series(slug: str, logic: DumanwuLogic, selection: str):
+def download_series(slug: str, logic: DumanwuLogic, selection: str) -> None:
     print(f"\n{UI.CYAN}[*] Cargando serie '{slug}'...{UI.END}")
-    title, autor, sinopsis, chapters = logic.parse_series_page(slug)
+    title, _, _, chapters = logic.parse_series_page(slug)
     if not chapters:
         print(f"{UI.RED}[!] 0 capítulos.{UI.END}")
         return
 
     print(f"\n{UI.GREEN}[+] {UI.BOLD}{title}{UI.END}")
 
-    sel_indices = []
+    sel_indices: list[int] = []
     if selection.lower() == "all":
         sel_indices = list(range(len(chapters)))
     else:
         for part in selection.replace(" ", "").split(","):
             if "-" in part:
                 try:
-                    a, b = map(int, part.split("-"))
+                    a_s, b_s = part.split("-")
+                    a, b = int(a_s), int(b_s)
                     sel_indices.extend(range(a - 1, b))
                 except Exception:
                     pass
             elif part.isdigit():
                 sel_indices.append(int(part) - 1)
 
-    to_dl = [chapters[i] for i in sel_indices if 0 <= i < len(chapters)]
+    to_dl: list[dict[str, Any]] = [chapters[i] for i in sel_indices if 0 <= i < len(chapters)]  # pyright: ignore[reportExplicitAny]
     if not to_dl:
         print(f"{UI.RED}[!] Selección vacía.{UI.END}")
         return
 
-    clean_slug = re.sub(r"[\\/:*?\"<>|]", "", title).strip()
-    base_folder = f"{clean_slug} [{slug}]"
+    clean_slug: str = re.sub(r"[\\/:*?\"<>|]", "", str(title)).strip()
+    base_folder: str = f"{clean_slug} [{slug}]"
     if not os.path.exists(base_folder):
         os.makedirs(base_folder)
 
-    total_valid = 0
+    total_valid: int = 0
     for i, cap in enumerate(to_dl):
-        cap_title = cap.get("title", "Capítulo")
-        print(f"  [{i + 1}/{len(to_dl)}] {cap_title}...", end=" ", flush=True)  # type: ignore
-        imgs = logic.extract_images(cap)
+        cap_title: str = str(cap.get("title", "Capítulo"))  # pyright: ignore[reportAny]
+        print(f"  [{i + 1}/{len(to_dl)}] {cap_title}...", end=" ", flush=True)
+        imgs: list[str] = logic.extract_images(cap)
         if not imgs:
             print(f"{UI.RED}0 imgs{UI.END}")
             continue
         print()
 
-        cap_slug = cap.get("slug", str(i))
-        c_folder = os.path.join(base_folder, f"Cap_{i + 1:03d}_{cap_slug}")  # type: ignore
+        cap_slug: str = str(cap.get("slug", str(i)))  # pyright: ignore[reportAny]
+        c_folder: str = os.path.join(base_folder, f"Cap_{i + 1:03d}_{cap_slug}")
         if not os.path.exists(c_folder):
             os.makedirs(c_folder)
 
-        valid = 0
-        comp = 0
+        valid: int = 0
+        comp: int = 0
         with ThreadPoolExecutor(max_workers=MAX_WORKERS_DL) as ex:
             futures = [
                 ex.submit(dl_worker, (u, c_folder, x)) for x, u in enumerate(imgs)
@@ -462,54 +477,54 @@ def download_series(slug: str, logic: DumanwuLogic, selection: str):
                 comp += 1
                 if fut.result():
                     valid += 1
-                perc = int(30 * comp // len(imgs))
-                bar = "█" * perc + "-" * (30 - perc)
-                sys.stdout.write(f"\r   [{UI.CYAN}{bar}{UI.END}] {comp}/{len(imgs)}")
-                sys.stdout.flush()
+                perc: int = int(30 * comp // len(imgs))
+                bar: str = "█" * perc + "-" * (30 - perc)
+                _ = sys.stdout.write(f"\r   [{UI.CYAN}{bar}{UI.END}] {comp}/{len(imgs)}")
+                _ = sys.stdout.flush()
         total_valid += valid
         print()
 
     if total_valid > 0:
-        ext_out = OUTPUT_TYPE.lower()
+        ext_out: str = OUTPUT_TYPE.lower()
         print(f"   [*] Generando {ext_out.upper()}s por capítulo...")
         for j, cap_zip in enumerate(to_dl):
-            c_folder_name = f"Cap_{j + 1:03d}_{cap_zip['slug']}"
-            c_folder_path = os.path.join(base_folder, c_folder_name)
+            c_slug_v = cap_zip.get("slug", str(j))  # pyright: ignore[reportAny]
+            c_folder_name: str = f"Cap_{j + 1:03d}_{c_slug_v}"
+            c_folder_path: str = os.path.join(base_folder, c_folder_name)
             if not os.path.exists(c_folder_path):
                 continue
 
-            out_file = os.path.join(base_folder, f"{c_folder_name}.{ext_out}")
+            out_file: str = os.path.join(base_folder, f"{c_folder_name}.{ext_out}")
 
-            if ext_out == "pdf" and HAS_PILLOW:
-                paths = sorted(
+            if ext_out == "pdf" and has_pillow and Image is not None:
+                paths: list[str] = sorted(
                     os.path.join(c_folder_path, f)
                     for f in os.listdir(c_folder_path)
                     if os.path.isfile(os.path.join(c_folder_path, f))
                 )
-                pages = []
+                pages: list[Any] = []  # pyright: ignore[reportExplicitAny]
                 for p in paths:
                     try:
                         pages.append(Image.open(p).convert("RGB"))
                     except Exception:
                         pass
                 if pages:
-                    pages[0].save(out_file, save_all=True, append_images=pages[1:])
+                    _ = pages[0].save(out_file, save_all=True, append_images=pages[1:])  # pyright: ignore[reportAny]
             else:
                 with zipfile.ZipFile(out_file, "w", zipfile.ZIP_DEFLATED) as zf:
                     for f in os.listdir(c_folder_path):
-                        full = os.path.join(c_folder_path, f)
+                        full: str = os.path.join(c_folder_path, f)
                         if os.path.isfile(full):
-                            zf.write(full, f)
+                            _ = zf.write(full, f)
 
             if DELETE_TEMP:
                 shutil.rmtree(c_folder_path)
 
         print(f"   {UI.GREEN}[OK] Empaquetado completado en: {base_folder}{UI.END}")
-    # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 
-def main():
-    logic = DumanwuLogic()
+def main() -> None:
+    logic: DumanwuLogic = DumanwuLogic()
     while True:
         UI.header()
         print(f" {UI.PURPLE}Menú Principal:{UI.END}")
@@ -520,36 +535,36 @@ def main():
         print(f" ├── Salida: {UI.CYAN}{OUTPUT_TYPE.upper()}{UI.END}")
         print(f" └── Imagen: {UI.CYAN}{USER_FORMAT.upper()}{UI.END}")
 
-        op = input(f"\n{UI.YELLOW} Selecciona una opción > {UI.END}").strip()
+        op: str = input(f"\n{UI.YELLOW} Selecciona una opción > {UI.END}").strip()
         if op == "1":
-            slug = input(f"{UI.CYAN} [?] Slug: {UI.END}").strip()
-            if not slug:
+            slug_in: str = input(f"{UI.CYAN} [?] Slug: {UI.END}").strip()
+            if not slug_in:
                 continue
-            sel = (
+            sel_in: str = (
                 input(f"{UI.CYAN} [?] Caps ('1', '3-5', 'all'): {UI.END}").strip()
                 or "all"
             )
-            download_series(slug, logic, sel)
-            input(f"\n{UI.CYAN} Enter para continuar...{UI.END}")
+            download_series(slug_in, logic, sel_in)
+            _ = input(f"\n{UI.CYAN} Enter para continuar...{UI.END}")
         elif op == "2":
-            q = input(f"{UI.CYAN} [?] Búsqueda: {UI.END}").strip()
+            q: str = input(f"{UI.CYAN} [?] Búsqueda: {UI.END}").strip()
             if not q:
                 continue
-            results = logic.search(q)
+            results: list[dict[str, str]] = logic.search(q)
             if not results:
                 print(f"{UI.RED} Sin resultados.{UI.END}")
                 time.sleep(2)
                 continue
             for i, r in enumerate(results[:20]):
                 print(f" {i + 1:2d}. [{r['slug']}] {r['title']}")
-            sel = input(f"\n{UI.YELLOW} Acción > {UI.END}").strip()
-            if sel.isdigit() and int(sel) <= len(results):
-                slug = results[int(sel) - 1]["slug"]
-                caps = (
-                    input(f"{UI.CYAN} [?] Caps para {slug}: {UI.END}").strip() or "all"
+            sel_q: str = input(f"\n{UI.YELLOW} Acción > {UI.END}").strip()
+            if sel_q.isdigit() and int(sel_q) <= len(results):
+                slug_res: str = results[int(sel_q) - 1]["slug"]
+                caps_res: str = (
+                    input(f"{UI.CYAN} [?] Caps para {slug_res}: {UI.END}").strip() or "all"
                 )
-                download_series(slug, logic, caps)
-                input("\n Enter...")
+                download_series(slug_res, logic, caps_res)
+                _ = input("\n Enter...")
         elif op == "3":
             break
 
