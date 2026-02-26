@@ -7,16 +7,32 @@ import base64
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
-from typing import Any
-import shutil
+from typing import Any, Protocol, TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    class ScraplingNode(Protocol):
+        @property
+        def text(self) -> str | None: ...
+        @property
+        def attrib(self) -> dict[str, str]: ...
+        def css(self, sel: str) -> "ScraplingNode": ...
+        @property
+        def first(self) -> "ScraplingNode": ...
+        @property
+        def parent(self) -> "ScraplingNode": ...
 
 import requests
-from scrapling import Selector
+
+if TYPE_CHECKING:
+    def Selector(html: str, url: str = "") -> "ScraplingNode": ... # pyright: ignore[reportUnusedParameter]
+else:
+    from scrapling import Selector # type: ignore
 
 # Support for PILLOW
 has_pillow: bool
@@ -43,9 +59,9 @@ class UI:
     @staticmethod
     def header() -> None:
         _ = os.system("cls" if os.name == "nt" else "clear")
-        print(f"{UI.BLUE}╔══════════════════════════════╗")
-        print(f"║ {UI.BOLD}TOONKOR DOWNLOADER v1.5.0{UI.END}{UI.BLUE} ║")
-        print(f"╚══════════════════════════════╝{UI.END}")
+        print(f"{UI.BLUE}╔══════════════════════════════════════╗")
+        print(f"║ {UI.BOLD}TOONKOR DOWNLOADER v1.5.0{UI.END}{UI.BLUE}            ║")
+        print(f"╚══════════════════════════════════════╝{UI.END}")
 
 
 # ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
@@ -85,7 +101,11 @@ SESSION: requests.Session = make_session()
 
 # ─── LÓGICA PRINCIPAL ─────────────────────────────────────────────────────────
 class ToonkorLogic:
-    CDN_HOSTS: list[str] = ["aws-cloud-no2.site", "aws-cloud-no1.site", "aws-cloud-no3.site"]
+    CDN_HOSTS: list[str] = [
+        "aws-cloud-no2.site",
+        "aws-cloud-no1.site",
+        "aws-cloud-no3.site",
+    ]
     _UI_PATHS: tuple[str, ...] = ("/images/", "/bann/", "/img/", "/icons/", "/logo")
 
     def get_series_url(self, slug: str) -> str:
@@ -94,21 +114,26 @@ class ToonkorLogic:
     def get_chapter_url(self, series_slug: str, chapter_num: int) -> str:
         return f"{BASE_URL}{series_slug}_{chapter_num}화.html"
 
-    def parse_series_page(self, html: str, series_slug: str) -> tuple[str, str, str, list[int]]:
-        page: Any = Selector(html, url=BASE_URL)  # pyright: ignore[reportExplicitAny]
+    def parse_series_page(
+        self, html: str, series_slug: str
+    ) -> tuple[str, str, str, list[int]]:
+        page = Selector(html, url=BASE_URL)
         title: str = series_slug
         for sel in ["h1", ".toon-title", ".series-title", ".view-title", "#toon_title"]:
-            node: Any = page.css(sel).first  # pyright: ignore[reportAny, reportExplicitAny]
-            if node and node.text and node.text.strip():  # pyright: ignore[reportAny]
-                title = node.text.strip()  # pyright: ignore[reportAny]
-                break
+            node = cast(object, page.css(sel).first)
+            if node:
+                t = getattr(node, "text", "")
+                if t and str(t).strip():
+                    title = str(t).strip()
+                    break
 
         autor: str = ""
         sinopsis: str = ""
 
-        meta: Any = page.css('meta[name="description"]').first  # pyright: ignore[reportAny, reportExplicitAny]
+        meta = cast(object, page.css('meta[name="description"]').first)
         if meta:
-            content: str = str(meta.attrib.get("content", "")).strip()  # pyright: ignore[reportAny]
+            meta_attrib = cast(dict[str, str], getattr(meta, "attrib", {}))
+            content: str = str(meta_attrib.get("content", "")).strip()
             m_meta = re.search(
                 r"작가\s+(.+?)\s+총편수\s+총\s+\d+화\s*(.*)", content, re.DOTALL
             )
@@ -120,10 +145,12 @@ class ToonkorLogic:
 
         if not autor:
             for sel in [".writer", ".author", ".toon-author", "[class*='author']"]:
-                node = page.css(sel).first  # pyright: ignore[reportAny]
-                if node and node.text and node.text.strip():  # pyright: ignore[reportAny]
-                    autor = node.text.strip()  # pyright: ignore[reportAny]
-                    break
+                node = cast(object, page.css(sel).first)
+                if node:
+                    a = getattr(node, "text", "")
+                    if a and str(a).strip():
+                        autor = str(a).strip()
+                        break
 
         if not sinopsis:
             for sel in [
@@ -134,17 +161,23 @@ class ToonkorLogic:
                 "#toon_desc",
                 ".story",
             ]:
-                node = page.css(sel).first  # pyright: ignore[reportAny]
-                if node and node.text and node.text.strip():  # pyright: ignore[reportAny]
-                    sinopsis = node.text.strip()[:500]  # pyright: ignore[reportAny]
-                    break
+                node = cast(object, page.css(sel).first)
+                if node:
+                    s = getattr(node, "text", "")
+                    if s and str(s).strip():
+                        sinopsis = str(s).strip()[:500]
+                        break
 
         slug_esc: str = re.escape(series_slug)
-        chapter_pattern: re.Pattern[str] = re.compile(rf"/{slug_esc}_(\d+)화\.html", re.IGNORECASE)
+        chapter_pattern: re.Pattern[str] = re.compile(
+            rf"/{slug_esc}_(\d+)화\.html", re.IGNORECASE
+        )
         nums: set[int] = set()
 
-        for a in page.css("a[href]"):  # pyright: ignore[reportAny]
-            href: str = str(a.attrib.get("href", ""))  # pyright: ignore[reportAny]
+        css_results = cast(list[object], cast(object, page.css("a[href]")))
+        for a in css_results:
+            a_attrib = cast(dict[str, str], getattr(a, "attrib", {}))
+            href: str = str(a_attrib.get("href", ""))
             m2 = chapter_pattern.search(href)
             if m2:
                 nums.add(int(m2.group(1)))
@@ -156,12 +189,19 @@ class ToonkorLogic:
         return title, autor, sinopsis, chapters
 
     def extract_images_from_chapter(self, chapter_html: str) -> list[str]:
-        b64: Any = re.search(r"var toon_img\s*=\s*'([^']+)';", chapter_html)  # pyright: ignore[reportExplicitAny]
-        if b64:
+        b64_match = re.search(r"var toon_img\s*=\s*'([^']+)';", chapter_html)
+        if b64_match:
             try:
-                decoded: str = base64.b64decode(b64.group(1)).decode("utf-8")  # pyright: ignore[reportAny]
-                inner_page: Any = Selector(decoded, url=BASE_URL)  # pyright: ignore[reportExplicitAny]
-                urls: list[str] = [str(img.attrib.get("src", "")) for img in inner_page.css("img[src]")]  # pyright: ignore[reportAny]
+                b64_data = b64_match.group(1)
+                decoded: str = base64.b64decode(b64_data).decode("utf-8")
+                inner_page = Selector(decoded, url=BASE_URL)
+                
+                img_nodes = cast(list[object], cast(object, inner_page.css("img[src]")))
+                urls: list[str] = []
+                for img in img_nodes:
+                    img_attrib = cast(dict[str, str], getattr(img, "attrib", {}))
+                    urls.append(str(img_attrib.get("src", "")))
+
                 valid: list[str] = [
                     u
                     for u in urls
@@ -173,7 +213,9 @@ class ToonkorLogic:
                 print(f"{UI.RED}[!] Base64 error: {e}{UI.END}")
 
         cdn_re: re.Pattern[str] = re.compile(
-            r"https?://(?:" + "|".join(re.escape(h) for h in self.CDN_HOSTS) + r")"
+            r"https?://(?:"
+            + "|".join(re.escape(h) for h in self.CDN_HOSTS)
+            + r")"
             + r'/[^\s"\'<>]+\.(?:jpe?g|png|webp|gif)',
             re.IGNORECASE,
         )
@@ -181,18 +223,25 @@ class ToonkorLogic:
         if cdn_urls:
             return cdn_urls
 
-        page: Any = Selector(chapter_html, url=BASE_URL)  # pyright: ignore[reportExplicitAny]
-        toon_div: Any = page.css("#toon_img").first  # pyright: ignore[reportAny, reportExplicitAny]
-        scope: Any = toon_div if toon_div else page  # pyright: ignore[reportAny, reportExplicitAny]
+        page = Selector(chapter_html, url=BASE_URL)
+        toon_div = cast(object, page.css("#toon_img").first)
+        scope = toon_div if toon_div else page
 
-        candidates: list[str] = [
-            src
-            for img in scope.css("img")  # pyright: ignore[reportAny]
-            for src in [str(img.attrib.get("src") or img.attrib.get("data-src") or "")]  # pyright: ignore[reportAny]
-            if src.startswith("https://")
-            and not any(p in src for p in self._UI_PATHS)
-            and any(ext in src.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"])
-        ]
+        # Dynamic css call since scope could be ScraplingNode or similar
+        css_func = getattr(scope, "css", None)
+        img_nodes_scope: list[object] = []
+        if callable(css_func):
+            img_nodes_scope = cast(list[object], css_func("img"))
+
+        candidates: list[str] = []
+        for img in img_nodes_scope:
+            img_attrib = cast(dict[str, str], getattr(img, "attrib", {}))
+            src = str(img_attrib.get("src") or img_attrib.get("data-src") or "")
+            if (src.startswith("https://") and 
+                not any(p in src for p in self._UI_PATHS) and 
+                any(ext in src.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"])):
+                candidates.append(src)
+
         if candidates:
             return candidates
 
@@ -238,24 +287,35 @@ def parse_sel(s: str, max_len: int) -> list[int]:
 
 
 _NAV_SLUGS: set[str] = {
-    "웹툰", "애니", "주소안내", "단행본", "망가", "포토툰", "코사이트", "토토보증업체", "notice", "bbs",
+    "웹툰",
+    "애니",
+    "주소안내",
+    "단행본",
+    "망가",
+    "포토툰",
+    "코사이트",
+    "토토보증업체",
+    "notice",
+    "bbs",
 }
 
 
 def fetch_series_list() -> list[dict[str, str]]:
     url: str = f"{BASE_URL}{WEBTOON_PAGE}"
     try:
-        r: Any = SESSION.get(url, timeout=10)  # pyright: ignore[reportExplicitAny]
-        if r.status_code != 200:  # pyright: ignore[reportAny]
-            print(f"{UI.RED}[!] HTTP {r.status_code}{UI.END}")  # pyright: ignore[reportAny]
+        r = SESSION.get(url, timeout=10)
+        if r.status_code != 200:
+            print(f"{UI.RED}[!] HTTP {r.status_code}{UI.END}")
             return []
 
-        page: Any = Selector(r.text, url=url)  # pyright: ignore[reportAny, reportExplicitAny]
+        page = Selector(r.text, url=url)
         series: list[dict[str, str]] = []
         seen: set[str] = set()
 
-        for a in page.css("a[href]"):  # pyright: ignore[reportAny]
-            href: str = str(a.attrib.get("href", ""))  # pyright: ignore[reportAny]
+        css_results = cast(list[object], cast(object, page.css("a[href]")))
+        for a in css_results:
+            a_attrib = cast(dict[str, str], getattr(a, "attrib", {}))
+            href: str = str(a_attrib.get("href", ""))
             slug: str = href.strip("/")
 
             if not slug or slug in seen or slug in _NAV_SLUGS:
@@ -266,13 +326,18 @@ def fetch_series_list() -> list[dict[str, str]]:
                 continue
 
             seen.add(slug)
-            text: str = str(a.text or "").strip()  # pyright: ignore[reportAny]
+            text: str = str(getattr(a, "text", "") or "").strip()
             title: str = slug
-            parent: Any = a.parent  # pyright: ignore[reportAny, reportExplicitAny]
+            parent = cast(object, getattr(a, "parent", None))
             if parent:
-                h: Any = parent.css("h2, h3, h4, strong, b").first  # pyright: ignore[reportAny, reportExplicitAny]
-                if h and h.text and h.text.strip():  # pyright: ignore[reportAny]
-                    title = h.text.strip()  # pyright: ignore[reportAny]
+                parent_css = getattr(parent, "css", None)
+                if callable(parent_css):
+                    h_results = parent_css("h2, h3, h4, strong, b")
+                    h = cast(object, getattr(h_results, "first", None))
+                    if h:
+                        h_text = getattr(h, "text", "")
+                        if h_text and str(h_text).strip():
+                            title = str(h_text).strip()
             elif "더 읽기" not in text and text:
                 title = text
 
@@ -283,16 +348,15 @@ def fetch_series_list() -> list[dict[str, str]]:
         return []
 
 
-def search_query(query: str) -> list[str]:
+def search_query(query: str) -> list[dict[str, str]]:
     print(f"{UI.CYAN}[*] Buscando '{query}'...{UI.END}")
     all_s: list[dict[str, str]] = fetch_series_list()
     if not all_s:
         print(f"{UI.YELLOW}[!] Catálogo vacío. Usando slug directo.{UI.END}")
-        return [query]
-    q: str = query.lower()
-    return [
-        s["slug"] for s in all_s if q in s["title"].lower() or q in s["slug"].lower()
-    ]
+        return [{"slug": query, "title": query}]
+
+    q = query.lower()
+    return [s for s in all_s if q in s["title"].lower() or q in s["slug"].lower()]
 
 
 def save_img(raw: bytes, path: str, fmt: str) -> None:
@@ -301,12 +365,25 @@ def save_img(raw: bytes, path: str, fmt: str) -> None:
             _ = f.write(raw)
         return
     try:
-        img: Any = Image.open(BytesIO(raw))  # pyright: ignore[reportExplicitAny]
-        if fmt.lower() in ("jpg", "jpeg") and img.mode in ("RGBA", "LA"):  # pyright: ignore[reportAny]
-            bg: Any = Image.new(img.mode[:-1], img.size, (255, 255, 255))  # pyright: ignore[reportAny, reportExplicitAny]
-            _ = bg.paste(img, img.split()[-1])  # pyright: ignore[reportAny]
-            img = bg.convert("RGB")  # pyright: ignore[reportAny]
-        _ = img.save(path, quality=92)  # pyright: ignore[reportAny]
+        img_obj = Image.open(BytesIO(raw))
+        img = cast(object, img_obj)
+        img_mode = str(getattr(img, "mode", ""))
+        img_size = cast(tuple[int, int], getattr(img, "size", (0, 0)))
+        if fmt.lower() in ("jpg", "jpeg") and img_mode in ("RGBA", "LA"):
+            bg = Image.new(img_mode[:-1], img_size, (255, 255, 255))
+            # Dynamic paste call
+            paste_func = getattr(bg, "paste", None)
+            if callable(paste_func):
+                split_func = getattr(img, "split", None)
+                if callable(split_func):
+                    img_split = cast(list[object], split_func())
+                    if img_split:
+                        _ = paste_func(img, img_split[-1])
+            img = bg.convert("RGB")
+        
+        save_func = getattr(img, "save", None)
+        if callable(save_func):
+            _ = save_func(path, quality=92)
     except Exception:
         with open(path, "wb") as f:
             _ = f.write(raw)
@@ -328,112 +405,205 @@ def dl_worker(args: tuple[str, str, int]) -> bool:
 
     for attempt in range(3):
         try:
-            r: Any = SESSION.get(url, timeout=(10, 15))  # pyright: ignore[reportExplicitAny]
-            if r.status_code == 200:  # pyright: ignore[reportAny]
-                save_img(r.content, path, USER_FORMAT)  # pyright: ignore[reportAny]
+            r = SESSION.get(url, timeout=(10, 15))
+            if r.status_code == 200:
+                save_img(r.content, path, USER_FORMAT)
                 return True
         except Exception:
             time.sleep(attempt + 1)
     return False
 
 
-def download_chapter(logic: ToonkorLogic, series_slug: str, chapter_num: int) -> list[str]:
+def download_chapter(
+    logic: ToonkorLogic, series_slug: str, chapter_num: int
+) -> list[str]:
     url: str = logic.get_chapter_url(series_slug, chapter_num)
     try:
-        r: Any = SESSION.get(url, timeout=(10, 15))  # pyright: ignore[reportExplicitAny]
-        if r.status_code != 200:  # pyright: ignore[reportAny]
+        r = SESSION.get(url, timeout=(10, 15))
+        if r.status_code != 200:
             return []
-        return logic.extract_images_from_chapter(r.text)  # pyright: ignore[reportAny]
+        return logic.extract_images_from_chapter(str(r.text))
     except Exception:
         return []
 
 
-def download_gallery(series_slug: str, logic: ToonkorLogic, chapters_to_dl: str = "all") -> None:
+def download_gallery(series_slug: str, logic: ToonkorLogic) -> None:
+    print(f"\n{UI.CYAN}[*] Cargando serie '{series_slug}'...{UI.END}")
     try:
-        data: Any = METADATA_CACHE.get(series_slug)  # pyright: ignore[reportExplicitAny]
+        data = cast("dict[str, object] | None", METADATA_CACHE.get(series_slug))
         if not data:
-            r: Any = SESSION.get(logic.get_series_url(series_slug), timeout=15)  # pyright: ignore[reportExplicitAny]
-            if r.status_code != 200:  # pyright: ignore[reportAny]
+            r = SESSION.get(logic.get_series_url(series_slug), timeout=15)
+            if r.status_code != 200:
+                print(f"{UI.RED}[!] HTTP {r.status_code}{UI.END}")
                 return
-            title, autor, sinopsis, chapters = logic.parse_series_page(r.text, series_slug)  # pyright: ignore[reportAny]
+            title, autor, sinopsis, chapters = logic.parse_series_page(
+                str(r.text), series_slug
+            )
             if not chapters:
-                chapters = []
+                chapters: list[int] = []
                 for n in range(1, 31):
-                    resp: Any = SESSION.head(logic.get_chapter_url(series_slug, n), timeout=5)  # pyright: ignore[reportExplicitAny]
-                    if resp.status_code == 200:  # pyright: ignore[reportAny]
-                        chapters.append(n)  # pyright: ignore[reportUnknownMemberType]
+                    resp = SESSION.head(
+                        logic.get_chapter_url(series_slug, n), timeout=5
+                    )
+                    if resp.status_code == 200:
+                        chapters.append(n)
                     elif chapters:
                         break
-            data = {"title": title, "autor": autor, "sinopsis": sinopsis, "chapters": chapters}
+            data = {
+                "title": title,
+                "autor": autor,
+                "sinopsis": sinopsis,
+                "chapters": chapters,
+            }
             METADATA_CACHE[series_slug] = data
 
-        raw_title: str = str(data.get("title", series_slug))  # pyright: ignore[reportAny]
-        clean_title: str = "".join(c for c in raw_title if c.isalnum() or c in " -_[]").strip()
+        raw_title: str = str(data.get("title", series_slug))
+        autor_str: str = str(data.get("autor", ""))
+        sinop_str: str = str(data.get("sinopsis", ""))
+        all_chapters = cast("list[int]", data.get("chapters", []))
+
+        if not all_chapters:
+            print(f"{UI.RED}[!] 0 capítulos.{UI.END}")
+            return
+
+        print(f"\n{UI.GREEN}[+] {UI.BOLD}{raw_title}{UI.END}")
+        print(f"    Autor   : {autor_str or UI.YELLOW + 'N/A' + UI.END}")
+        print(f"    Sinopsis: {sinop_str[:100] or UI.YELLOW + 'N/A' + UI.END}")
+        print(f"    Caps    : {len(all_chapters)}")
+
+        PAGE = 20
+        show_start = 0
+        selection = ""
+        while True:
+            show_end = min(show_start + PAGE, len(all_chapters))
+            print(f"\n {UI.PURPLE}{'─' * 48}{UI.END}")
+            for idx in range(show_start, show_end):
+                print(f"  {UI.BOLD}{idx + 1:4d}.{UI.END} Capítulo {all_chapters[idx]}")
+            print(f" {UI.PURPLE}{'─' * 48}{UI.END}")
+
+            nav = ""
+            if show_end < len(all_chapters):
+                nav += f" {UI.CYAN}n{UI.END}=más"
+            if show_start > 0:
+                nav += f"  {UI.CYAN}p{UI.END}=ant"
+            nav += "  o escribe selección y Enter"
+            print(nav)
+
+            raw = input(f"\n{UI.YELLOW} Caps ('1', '3-5,9', 'all') ➜ {UI.END}").strip()
+            if raw.lower() == "n" and show_end < len(all_chapters):
+                show_start += PAGE
+            elif raw.lower() == "p" and show_start > 0:
+                show_start -= PAGE
+            elif raw == "":
+                continue
+            else:
+                selection = raw
+                break
+
+        chap_set: set[int] = set(all_chapters)
+        selected: list[int] = []
+        if selection.lower() == "all":
+            selected = all_chapters
+        else:
+            requested: set[int] = parse_chapter_nums(selection)
+            by_num: list[int] = [
+                c for c in sorted(list(requested), reverse=True) if c in chap_set
+            ]
+            if by_num:
+                selected = by_num
+            else:
+                selected = [
+                    all_chapters[i] for i in parse_sel(selection, len(all_chapters))
+                ]
+
+        if not selected:
+            print(f"{UI.RED}[!] Selección vacía.{UI.END}")
+            return
+
+        print("\n  Capítulos a descargar:")
+        for i, chap in enumerate(selected):
+            print(f"    {i + 1}. Capítulo {chap}")
+        confirm = (
+            input(f"\n{UI.YELLOW} ¿Confirmar? (Enter=sí / n=cancelar) ➜ {UI.END}")
+            .strip()
+            .lower()
+        )
+        if confirm == "n":
+            return
+
+        print(f"\n{UI.CYAN}[*] Descargando {len(selected)} capítulo(s)...{UI.END}")
+
+        clean_title: str = re.sub(r'[\\/:*?"<>|]', "", raw_title).strip()
         folder: str = f"{clean_title} [{series_slug}]"
         os.makedirs(folder, exist_ok=True)
 
         with open(f"{folder}/info.json", "w", encoding="utf-8") as f:
-            json.dump({
-                "slug": series_slug, "title": raw_title, "autor": data["autor"],
-                "sinopsis": data["sinopsis"], "chapters": data["chapters"],
-                "url": logic.get_series_url(series_slug)
-            }, f, indent=4, ensure_ascii=False)
-
-        all_chapters: list[int] = data["chapters"]  # pyright: ignore[reportAny]
-        if not all_chapters:
-            return
-
-        if chapters_to_dl == "all":
-            selected: list[int] = all_chapters
-        else:
-            chap_set: set[int] = set(all_chapters)
-            requested: set[int] = parse_chapter_nums(chapters_to_dl)
-            by_num: list[int] = [c for c in sorted(list(requested), reverse=True) if c in chap_set]
-            if by_num:
-                selected = by_num
-            else:
-                selected = [all_chapters[i] for i in parse_sel(chapters_to_dl, len(all_chapters))]
-
-        all_images: list[tuple[str, str, int]] = []
-        for chap in selected:
-            imgs: list[str] = download_chapter(logic, series_slug, chap)
-            chap_folder: str = os.path.join(folder, f"chapter_{chap:04d}")
-            os.makedirs(chap_folder, exist_ok=True)
-            all_images.extend((u, chap_folder, x) for x, u in enumerate(imgs))
-
-        if not all_images:
-            return
-
-        comp: int = 0
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS_DL) as exe:
-            futures: Any = [exe.submit(dl_worker, a) for a in all_images]  # pyright: ignore[reportExplicitAny]
-            for _ in as_completed(futures):  # pyright: ignore[reportAny]
-                comp += 1
-                perc: int = int(30 * comp // len(all_images))
-                _ = sys.stdout.write(f"\r   [{UI.CYAN}{'█' * perc}{'-' * (30 - perc)}{UI.END}] {comp}/{len(all_images)}")
-                _ = sys.stdout.flush()
-        print()
+            json.dump(
+                {
+                    "slug": series_slug,
+                    "title": raw_title,
+                    "autor": autor_str,
+                    "sinopsis": sinop_str,
+                    "chapters": all_chapters,
+                    "url": logic.get_series_url(series_slug),
+                },
+                f,
+                indent=4,
+                ensure_ascii=False,
+            )
 
         ext_out: str = OUTPUT_TYPE.lower()
-        for chap in selected:
-            chap_f_name: str = f"chapter_{chap:04d}"
-            chap_f_path: str = os.path.join(folder, chap_f_name)
-            if not os.path.exists(chap_f_path):
+
+        for i, chap in enumerate(selected):
+            print(
+                f"  [{i + 1}/{len(selected)}] Capítulo {chap}...", end=" ", flush=True
+            )
+            imgs: list[str] = download_chapter(logic, series_slug, chap)
+            if not imgs:
+                print(f"{UI.RED}0 imgs — fallido{UI.END}")
                 continue
+            print()
+
+            chap_f_name: str = f"{chap:03d} - 제{chap}화"
+            chap_f_path: str = os.path.join(folder, chap_f_name)
+            os.makedirs(chap_f_path, exist_ok=True)
+
+            comp: int = 0
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS_DL) as exe:
+                futures = {
+                    exe.submit(dl_worker, (u, chap_f_path, x)): x
+                    for x, u in enumerate(imgs)
+                }
+                for _ in as_completed(futures):
+                    comp += 1
+                    perc: int = int(30 * comp // len(imgs))
+                    _ = sys.stdout.write(
+                        f"\r   [{UI.CYAN}{'█' * perc}{'-' * (30 - perc)}{UI.END}] {comp}/{len(imgs)}"
+                    )
+                    _ = sys.stdout.flush()
+            print()
+
             out_f: str = os.path.join(folder, f"{chap_f_name}.{ext_out}")
             if ext_out == "pdf" and has_pillow and Image is not None:
-                paths: list[str] = sorted(os.path.join(chap_f_path, f) for f in os.listdir(chap_f_path) if not f.endswith(".json"))
-                pages: list[Any] = []  # pyright: ignore[reportExplicitAny]
+                paths: list[str] = sorted(
+                    os.path.join(chap_f_path, f)
+                    for f in os.listdir(chap_f_path)
+                    if not f.endswith(".json")
+                )
+                pages: list[object] = []
                 for p in paths:
                     try:
-                        pages.append(Image.open(p).convert("RGB"))
+                        img_to_add = cast(object, Image.open(p).convert("RGB"))
+                        pages.append(img_to_add)
                     except Exception:
                         pass
                 if pages:
-                    _ = pages[0].save(out_f, save_all=True, append_images=pages[1:])  # pyright: ignore[reportAny]
+                    save_func = getattr(pages[0], "save", None)
+                    if callable(save_func):
+                        _ = save_func(out_f, save_all=True, append_images=pages[1:])
             else:
                 with zipfile.ZipFile(out_f, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for f in os.listdir(chap_f_path):
+                    for f in sorted(os.listdir(chap_f_path)):
                         full: str = os.path.join(chap_f_path, f)
                         if os.path.isfile(full):
                             _ = zf.write(full, f)
@@ -459,28 +629,63 @@ def main() -> None:
         if op == "1":
             slug: str = input(f"{UI.CYAN} [?] Slug: {UI.END}").strip()
             if slug:
-                caps: str = input(f"{UI.CYAN} Capítulos ('1-5,10' o 'all'): {UI.END}").strip() or "all"
-                download_gallery(slug, logic, caps)
+                download_gallery(slug, logic)
                 _ = input(f"\n{UI.CYAN}Enter...{UI.END}")
         elif op == "2":
-            q: str = input(f"{UI.CYAN} [?] Búsqueda: {UI.END}").strip()
+            q: str = input(f"{UI.CYAN} [?] Búsqueda de serie: {UI.END}").strip()
             if not q:
                 continue
-            slugs: list[str] = search_query(q)
-            if not slugs:
+            results: list[dict[str, str]] = search_query(q)
+            if not results:
                 print(f"{UI.RED} Sin resultados.{UI.END}")
                 time.sleep(2)
                 continue
-            for i, s in enumerate(slugs[:20]):
-                m: Any = METADATA_CACHE.get(s, {})  # pyright: ignore[reportAny, reportExplicitAny]
-                title: str = str(m.get("title", s))  # pyright: ignore[reportAny]
-                print(f" {i + 1:2d}. [{s}] {title}")
-            sel: str = input(f"\n{UI.YELLOW} Acción > {UI.END}").strip()
-            if sel.isdigit() and int(sel) <= len(slugs):
-                slug_sel: str = slugs[int(sel) - 1]
-                caps_sel: str = input(f"{UI.CYAN} [?] Caps para {slug_sel}: {UI.END}").strip() or "all"
-                download_gallery(slug_sel, logic, caps_sel)
-                _ = input("\n Enter...")
+
+            page: int = 0
+            while True:
+                UI.header()
+                start: int = page * MAX_RESULTS_PAGE
+                end: int = min(start + MAX_RESULTS_PAGE, len(results))
+                print(f" {UI.PURPLE}Búsqueda: '{q}'{UI.END}")
+                print(
+                    f" {UI.PURPLE}Mostrando {start + 1}-{end} de {len(results)} resultados{UI.END}"
+                )
+                print(f" {'━' * 50}")
+
+                for i, r in enumerate(results[start:end]):
+                    print(
+                        f" {UI.BOLD}{start + i + 1:3d}.{UI.END} [{UI.GREEN}{r['slug']}{UI.END}] {r['title'][:45]}"
+                    )
+
+                print(f" {'━' * 50}")
+                print(
+                    f" {UI.CYAN}Controles:{UI.END} {UI.BOLD}n{UI.END} (sig) | {UI.BOLD}p{UI.END} (ant) | {UI.BOLD}q{UI.END} (volver)"
+                )
+                print(
+                    f" {UI.CYAN}Selección:{UI.END} Escribe números (ej: '1', '1-5', '1,10')"
+                )
+
+                sel: str = input(f"\n{UI.YELLOW} Acción > {UI.END}").lower().strip()
+
+                if sel == "n" and end < len(results):
+                    page += 1
+                elif sel == "p" and page > 0:
+                    page -= 1
+                elif sel == "q":
+                    break
+                elif sel:
+                    idxs: list[int] = parse_sel(sel, len(results))
+                    if idxs:
+                        for idx_sel in idxs:
+                            slug_sel = results[idx_sel]["slug"]
+                            download_gallery(slug_sel, logic)
+                        _ = input(
+                            f"\n{UI.GREEN}Cola terminada. Enter para continuar...{UI.END}"
+                        )
+                        break
+                    else:
+                        print(f"{UI.RED} Entrada no válida.{UI.END}")
+                        time.sleep(1)
         elif op == "3":
             break
 

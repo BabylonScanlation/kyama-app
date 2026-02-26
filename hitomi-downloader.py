@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import struct
 import sys
 import time
@@ -8,7 +9,6 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from typing import cast
-import shutil
 
 import requests
 
@@ -37,9 +37,9 @@ class UI:
     @staticmethod
     def header() -> None:
         _ = os.system("cls" if os.name == "nt" else "clear")
-        print(f"{UI.BLUE}╔══════════════════════════════╗")
-        print(f"║   {UI.BOLD}HITOMI DOWNLOADER v1.2.5{UI.END}{UI.BLUE}   ║")
-        print(f"╚══════════════════════════════╝{UI.END}")
+        print(f"{UI.BLUE}╔══════════════════════════════════════╗")
+        print(f"║ {UI.BOLD}HITOMI DOWNLOADER v1.2.5{UI.END}{UI.BLUE}             ║")
+        print(f"╚══════════════════════════════════════╝{UI.END}")
 
 
 # ==========================================
@@ -132,7 +132,9 @@ def fetch_nozomi_ids(term: str) -> set[int]:
     if ":" in term:
         ns, v = term.split(":", 1)
         if ns in ["female", "male"]:
-            url: str = f"https://ltn.gold-usergeneratedcontent.net/n/tag/{term}-all.nozomi"
+            url: str = (
+                f"https://ltn.gold-usergeneratedcontent.net/n/tag/{term}-all.nozomi"
+            )
         elif ns == "language":
             url = f"https://ltn.gold-usergeneratedcontent.net/n/index-{v}.nozomi"
         else:
@@ -231,9 +233,7 @@ def download_gallery(gid: int, logic: HitomiLogic) -> None:
         d_dict = cast(dict[str, object], data)
 
         raw_title: str = str(d_dict.get("title", str(gid)))
-        clean_title: str = "".join(
-            [c for c in raw_title if c.isalnum() or c in " -_"]
-        ).strip()
+        clean_title: str = re.sub(r'[\\/:*?"<>|]', "", raw_title).strip()
         folder: str = f"{clean_title} [{gid}]"
         if not os.path.exists(folder):
             os.makedirs(folder)
@@ -286,7 +286,9 @@ def download_gallery(gid: int, logic: HitomiLogic) -> None:
                 if len(files) > 0:
                     perc: int = int(30 * comp // len(files))
                     bar: str = "█" * perc + "-" * (30 - perc)
-                    _ = sys.stdout.write(f"\r   [{UI.CYAN}{bar}{UI.END}] {comp}/{len(files)}")
+                    _ = sys.stdout.write(
+                        f"\r   [{UI.CYAN}{bar}{UI.END}] {comp}/{len(files)}"
+                    )
                     _ = sys.stdout.flush()
 
         # Empaquetado
@@ -307,8 +309,11 @@ def download_gallery(gid: int, logic: HitomiLogic) -> None:
                 pages: list[object] = [getattr(img_first, "convert")("RGB")]
                 for i_n in imgs[1:]:
                     img_next = cast(object, Image.open(i_n))
-                    pages.append(getattr(img_next, "convert")("RGB"))  # pyright: ignore[reportAny]
-                _ = getattr(pages[0], "save")(out_file, save_all=True, append_images=pages[1:])  # pyright: ignore[reportAny]
+                    converted = cast(object, getattr(img_next, "convert")("RGB"))
+                    pages.append(converted)
+                save_func = cast(object, getattr(pages[0], "save"))
+                if callable(save_func):
+                    _ = save_func(out_file, save_all=True, append_images=pages[1:])
         else:
             with zipfile.ZipFile(out_file, "w", zipfile.ZIP_DEFLATED) as zf:
                 for f_n in os.listdir(folder):
@@ -366,7 +371,7 @@ def main() -> None:
                 print(
                     f" {UI.PURPLE}Mostrando {start + 1}-{end} de {len(ids)} resultados{UI.END}"
                 )
-                print(f" {'━' * 54}")
+                print(f" {'━' * 50}")
 
                 # Carga masiva de metadata (batch)
                 batch: list[int] = ids[start:end]
@@ -389,7 +394,9 @@ def main() -> None:
 
                     with ThreadPoolExecutor(max_workers=20) as exe:
                         _ = list(exe.map(load, to_load))
-                    _ = sys.stdout.write("\r" + " " * 30 + "\r")  # Limpiar texto cargando
+                    _ = sys.stdout.write(
+                        "\r" + " " * 30 + "\r"
+                    )  # Limpiar texto cargando
 
                 for i, gid_b in enumerate(batch):
                     m_obj: object = METADATA_CACHE.get(str(gid_b), {})
@@ -400,7 +407,7 @@ def main() -> None:
                             f" {UI.BOLD}{start + i + 1:3d}.{UI.END} [{UI.GREEN}{gid_b}{UI.END}] {title}"
                         )
 
-                print(f" {'━' * 54}")
+                print(f" {'━' * 50}")
                 print(
                     f" {UI.CYAN}Controles:{UI.END} {UI.BOLD}n{UI.END} (sig) | {UI.BOLD}p{UI.END} (ant) | {UI.BOLD}q{UI.END} (volver)"
                 )
@@ -420,11 +427,31 @@ def main() -> None:
                     # Usar la función parse_sel reparada
                     idxs: list[int] = parse_sel(sel, len(ids))
                     if idxs:
-                        for idx_sel in idxs:
-                            download_gallery(ids[idx_sel], logic)
-                        _ = input(
-                            f"\n{UI.GREEN}Cola terminada. Enter para continuar...{UI.END}"
+                        print("\n  Galerías a descargar:")
+                        for x in idxs:
+                            m_obj_sel: object = METADATA_CACHE.get(str(ids[x]), {})
+                            title_sel: str = (
+                                str(
+                                    cast(dict[str, object], m_obj_sel).get("title", "")
+                                )[:50]
+                                if isinstance(m_obj_sel, dict)
+                                else ""
+                            )
+                            print(f"    - [{ids[x]}] {title_sel}")
+
+                        confirm = (
+                            input(
+                                f"\n{UI.YELLOW} ¿Confirmar? (Enter=sí / n=cancelar) ➜ {UI.END}"
+                            )
+                            .strip()
+                            .lower()
                         )
+                        if confirm != "n":
+                            for idx_sel in idxs:
+                                download_gallery(ids[idx_sel], logic)
+                            _ = input(
+                                f"\n{UI.GREEN}Cola terminada. Enter para continuar...{UI.END}"
+                            )
                     else:
                         print(f"{UI.RED} Entrada no válida.{UI.END}")
                         time.sleep(1)
