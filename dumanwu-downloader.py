@@ -240,7 +240,7 @@ except ImportError:
 BASE_URL = "https://dumanwu.com"
 OUTPUT_TYPE = "zip"
 USER_FORMAT = "webp"  # 'original' | 'jpg' | 'png' | 'webp'
-MAX_WORKERS_DL = 10
+MAX_WORKERS_DL = 50
 DELETE_TEMP = True
 MIN_IMAGE_SIZE_KB = 5
 
@@ -296,6 +296,9 @@ class UI:
 
 
 SESSION = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_connections=MAX_WORKERS_DL, pool_maxsize=MAX_WORKERS_DL)
+SESSION.mount("http://", adapter)
+SESSION.mount("https://", adapter)
 SESSION.headers.update(HEADERS)
 
 

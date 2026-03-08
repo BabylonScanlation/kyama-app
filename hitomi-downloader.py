@@ -48,7 +48,7 @@ class UI:
 OUTPUT_TYPE: str = "zip"  # 'zip', 'cbz', 'pdf'
 USER_FORMAT: str = "webp"  # 'original', 'jpg', 'png', 'webp'
 DELETE_TEMP: bool = True
-MAX_WORKERS_DL: int = 20
+MAX_WORKERS_DL: int = 50
 MAX_RESULTS_PAGE: int = 20
 # ==========================================
 
@@ -57,6 +57,12 @@ headers: dict[str, str] = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Referer": "https://hitomi.la/",
 }
+
+SESSION = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_connections=MAX_WORKERS_DL, pool_maxsize=MAX_WORKERS_DL)
+SESSION.mount("http://", adapter)
+SESSION.mount("https://", adapter)
+SESSION.headers.update(headers)
 
 
 class HitomiLogic:
@@ -72,7 +78,7 @@ class HitomiLogic:
 
     def load_gg(self) -> None:
         try:
-            body: str = requests.get(
+            body: str = SESSION.get(
                 "https://ltn.gold-usergeneratedcontent.net/gg.js", timeout=10
             ).text
 
@@ -143,7 +149,7 @@ def fetch_nozomi_ids(term: str) -> set[int]:
         url = f"https://ltn.gold-usergeneratedcontent.net/n/tag/{term}-all.nozomi"
 
     try:
-        r: requests.Response = requests.get(url, headers=headers, timeout=10)
+        r: requests.Response = SESSION.get(url, headers=headers, timeout=10)
         if r.status_code != 200:
             return set()
         return {
@@ -207,7 +213,7 @@ def dl_worker(args: tuple[HitomiLogic, dict[str, object], str, int]) -> bool:
         return True
     for _ in range(3):
         try:
-            r: requests.Response = requests.get(url, headers=headers, timeout=15)
+            r: requests.Response = SESSION.get(url, headers=headers, timeout=15)
             if r.status_code == 200:
                 save_img(r.content, path, USER_FORMAT)
                 return True
@@ -221,7 +227,7 @@ def download_gallery(gid: int, logic: HitomiLogic) -> None:
         # Usar caché si ya cargamos la info en el listado
         data: object = METADATA_CACHE.get(str(gid))
         if not data:
-            r: requests.Response = requests.get(
+            r: requests.Response = SESSION.get(
                 f"https://ltn.gold-usergeneratedcontent.net/galleries/{gid}.js",
                 headers=headers,
             )
@@ -237,35 +243,6 @@ def download_gallery(gid: int, logic: HitomiLogic) -> None:
         folder: str = f"{clean_title} [{gid}]"
         if not os.path.exists(folder):
             os.makedirs(folder)
-
-        # info.json simplificado (Babylon style)
-        artists_list: list[str] = []
-        raw_artists: object = d_dict.get("artists")
-        if isinstance(raw_artists, list):
-            for a_item in cast(list[object], raw_artists):
-                if isinstance(a_item, dict):
-                    a_dict: dict[str, object] = cast(dict[str, object], a_item)
-                    a_val: object = a_dict.get("artist", "")
-                    artists_list.append(str(a_val))
-
-        tags_list: list[str] = []
-        raw_tags: object = d_dict.get("tags")
-        if isinstance(raw_tags, list):
-            for t_item in cast(list[object], raw_tags):
-                if isinstance(t_item, dict):
-                    t_dict: dict[str, object] = cast(dict[str, object], t_item)
-                    t_val: object = t_dict.get("tag", "")
-                    tags_list.append(str(t_val))
-
-        info: dict[str, object] = {
-            "id": gid,
-            "title": raw_title,
-            "artists": artists_list,
-            "tags": tags_list,
-            "url": f"https://hitomi.la/galleries/{gid}.html",
-        }
-        with open(f"{folder}/info.json", "w", encoding="utf-8") as f:
-            json.dump(info, f, indent=4, ensure_ascii=False)
 
         print(f"\n{UI.GREEN}⬇  Iniciando: {UI.BOLD}{raw_title[:60]}...{UI.END}")
         raw_files = d_dict.get("files", [])
@@ -382,7 +359,7 @@ def main() -> None:
 
                     def load(gi: int) -> None:
                         try:
-                            r_l: requests.Response = requests.get(
+                            r_l: requests.Response = SESSION.get(
                                 f"https://ltn.gold-usergeneratedcontent.net/galleries/{gi}.js",
                                 timeout=5,
                             )
@@ -392,7 +369,7 @@ def main() -> None:
                         except Exception:
                             pass
 
-                    with ThreadPoolExecutor(max_workers=20) as exe:
+                    with ThreadPoolExecutor(max_workers=MAX_WORKERS_DL) as exe:
                         _ = list(exe.map(load, to_load))
                     _ = sys.stdout.write(
                         "\r" + " " * 30 + "\r"
