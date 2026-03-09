@@ -36,8 +36,8 @@ except ImportError:
 #  CONFIGURACIÓN
 # ══════════════════════════════════════════════════════════════════════════════
 BASE_URL = "https://fanfox.net"
-OUTPUT_TYPE = "cbz"  # 'zip' | 'cbz' | 'pdf'
-USER_FORMAT = "original"  # 'original' | 'jpg' | 'png' | 'webp'
+OUTPUT_TYPE = "zip"  # 'zip' | 'cbz' | 'pdf'
+USER_FORMAT = "webp"  # 'original' | 'jpg' | 'png' | 'webp'
 DELETE_TEMP = True
 MAX_WORKERS_DL = 8
 REQUEST_TIMEOUT = (15, 45)
@@ -774,7 +774,7 @@ def download_series(slug: str) -> None:
         file_name = f"Ch.{chap['chap']}"
         if safe_chap_title:
             file_name += f" - {safe_chap_title}"
-        
+
         out_file = os.path.join(out_folder, f"{file_name}.{ext_out}")
         pack_chapter(chap_dir, out_file, ext_out)
 

@@ -40,8 +40,8 @@ except ImportError:
 #  CONFIGURACIÓN  (edita aquí)
 # ══════════════════════════════════════════════════════════════════════════════
 BASE_URL = "https://wfwf448.com/"
-OUTPUT_TYPE = "cbz"  # 'zip' | 'cbz' | 'pdf'
-USER_FORMAT = "original"  # 'original' | 'jpg' | 'png' | 'webp'
+OUTPUT_TYPE = "zip"  # 'zip' | 'cbz' | 'pdf'
+USER_FORMAT = "webp"  # 'original' | 'jpg' | 'png' | 'webp'
 DELETE_TEMP = True
 MAX_WORKERS_DL = 16
 MAX_RESULTS_PAGE = 20
