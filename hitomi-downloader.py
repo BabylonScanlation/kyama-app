@@ -59,7 +59,9 @@ headers: dict[str, str] = {
 }
 
 SESSION = requests.Session()
-adapter = requests.adapters.HTTPAdapter(pool_connections=MAX_WORKERS_DL, pool_maxsize=MAX_WORKERS_DL)
+adapter = requests.adapters.HTTPAdapter(
+    pool_connections=MAX_WORKERS_DL, pool_maxsize=MAX_WORKERS_DL
+)
 SESSION.mount("http://", adapter)
 SESSION.mount("https://", adapter)
 SESSION.headers.update(headers)
