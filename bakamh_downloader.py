@@ -405,18 +405,18 @@ def _chapters_from_html(soup, manga_slug=""):
         href = a.get("chapter-data-url", "").strip().rstrip("/")
         if not href or "/manga/" not in href:
             continue
-        
+
         ch_slug = href.split("/")[-1]
         title = a.get_text(strip=True)
-        
+
         # Filtramos botones de UI por las dudas
         if _is_ui_button(title):
             continue
-            
+
         chapters.append({"title": title, "url": href, "slug": ch_slug})
-        
+
     if chapters:
-        chapters.reverse() # Madara suele listarlos del más nuevo al más viejo
+        chapters.reverse()  # Madara suele listarlos del más nuevo al más viejo
         return chapters
 
     # ── A: Madara estándar ────────────────────────────────────────────────────

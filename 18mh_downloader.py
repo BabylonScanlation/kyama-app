@@ -1,5 +1,5 @@
 """
-18MH DOWNLOADER v1.3
+18MH DOWNLOADER v1.4
 Fuente: 18mh.org
 
 Instalación:
@@ -7,6 +7,7 @@ Instalación:
 
 Uso:
     python 18mh_downloader.py
+    python 18mh_downloader.py --debug
 """
 
 import os
@@ -41,7 +42,8 @@ DELETE_TEMP = True
 MAX_WORKERS = 8
 TIMEOUT = (15, 45)
 RETRY_DELAY = 2.0
-DEBUG = False
+REQUEST_DELAY = 0.4  # segundos entre requests al sitio
+DEBUG = "--debug" in sys.argv
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -61,7 +63,7 @@ class C:
 
 def header() -> None:
     print(f"{C.BLUE}╔══════════════════════════════════════════╗")
-    print(f"║  {C.BOLD}18MH DOWNLOADER v1.3{C.END}{C.BLUE}                    ║")
+    print(f"║  {C.BOLD}18MH DOWNLOADER v1.4{C.END}{C.BLUE}                    ║")
     print(f"║  {C.DIM}18mh.org{C.END}{C.BLUE}                                ║")
     print(f"╚══════════════════════════════════════════╝{C.END}\n")
 
@@ -94,7 +96,9 @@ SESSION = requests.Session()
 SESSION.headers.update(_BASE_HEADERS)
 
 
-def _get_raw(url: str, referer: str = "", retries: int = 3) -> Optional[bytes]:
+def _get_raw(
+    url: str, referer: str = "", retries: int = 3, is_image: bool = False
+) -> Optional[bytes]:
     hdrs = {"Referer": referer} if referer else {}
     for attempt in range(retries):
         try:
@@ -102,16 +106,34 @@ def _get_raw(url: str, referer: str = "", retries: int = 3) -> Optional[bytes]:
             if r.status_code == 200 and r.content:
                 return r.content
             if r.status_code in (403, 404):
+                dbg(f"HTTP {r.status_code} → {url[:70]}")
                 return None
+            dbg(f"HTTP {r.status_code} intento {attempt + 1}/{retries} → {url[:70]}")
         except requests.RequestException as e:
+            dbg(f"Error intento {attempt + 1}/{retries}: {e}")
             if attempt < retries - 1:
                 time.sleep(RETRY_DELAY * (attempt + 1))
     return None
 
 
 def fetch_html(url: str, referer: str = "") -> Optional[str]:
+    """Descarga HTML respetando rate limiting y detectando encoding."""
+    time.sleep(REQUEST_DELAY)
     raw = _get_raw(url, referer)
-    return raw.decode("utf-8", errors="replace") if raw else None
+    if not raw:
+        return None
+    # Detectar encoding: primero headers, luego apparent_encoding de chardet
+    try:
+        r_tmp = requests.models.Response()
+        r_tmp._content = raw
+        r_tmp.encoding = "utf-8"
+        # Intentar detectar desde el HTML mismo (meta charset)
+        sniff = raw[:2048].decode("ascii", errors="ignore")
+        m = re.search(r'charset=["\']?([\w\-]+)', sniff, re.I)
+        enc = m.group(1) if m else "utf-8"
+        return raw.decode(enc, errors="replace")
+    except Exception:
+        return raw.decode("utf-8", errors="replace")
 
 
 def _soup(html: str) -> BeautifulSoup:
@@ -125,12 +147,11 @@ def _parse_cards(html: str) -> list:
     """Extrae las series, evadiendo las recomendaciones del fondo."""
     soup = _soup(html)
 
-    # 1. Destruir la sección de "Recomendados" para limpiar la página
+    # Destruir sección de recomendados para no contaminar los resultados
     for heading in soup.find_all(["h2", "h3"]):
         text = heading.get_text(strip=True)
         if any(kw in text for kw in ["您可能喜歡", "猜你喜歡", "推荐", "推薦"]):
             parent = heading.parent
-            # Si el header está en un contenedor div (lo habitual), borramos todo el div
             if parent and parent.name == "div":
                 parent.decompose()
             else:
@@ -139,18 +160,15 @@ def _parse_cards(html: str) -> list:
     results = []
     seen = set()
 
-    # 2. Extraer los links limpios
     for a in soup.find_all("a", href=re.compile(r"/manga/([^/?#]+)/?$")):
         href = a.get("href", "").rstrip("/")
         slug = href.split("/")[-1]
-
         if slug in seen or slug == "get":
             continue
 
         title = slug
         h3 = a.find(["h3", "h4", "p", "span"])
         img = a.find("img")
-
         if h3 and h3.get_text(strip=True):
             title = h3.get_text(strip=True)
         elif img and img.get("alt"):
@@ -159,6 +177,7 @@ def _parse_cards(html: str) -> list:
         seen.add(slug)
         results.append({"slug": slug, "title": title})
 
+    dbg(f"_parse_cards: {len(results)} resultados")
     return results
 
 
@@ -182,7 +201,6 @@ def parse_series_meta(slug: str) -> Optional[dict]:
         mid = mid_match.group(1)
 
     status = "完結" if "完結" in html else "連載中"
-
     summary = ""
     for p in soup.find_all("p"):
         t = p.get_text(strip=True)
@@ -210,7 +228,6 @@ def get_chapter_list(mid: str) -> list:
 
     soup = _soup(html)
     chapters = []
-
     for a in soup.find_all("a", href=True):
         href = a["href"]
         title = a.get_text(strip=True)
@@ -292,7 +309,7 @@ def dl_worker(args: tuple) -> bool:
     path = os.path.join(folder, f"{idx + 1:03d}.{ext}")
     if os.path.exists(path):
         return True
-    raw = _get_raw(url, referer=SITE_URL)
+    raw = _get_raw(url, referer=SITE_URL, is_image=True)
     if raw:
         save_image(raw, path)
         return True
@@ -310,15 +327,17 @@ def pack_folder(src: str, out: str, fmt: str) -> None:
     )
     if not files:
         return
+
     if fmt == "pdf" and HAS_PILLOW and Image is not None:
         pages = []
         for p in files:
             try:
                 pages.append(Image.open(p).convert("RGB"))
-            except:
+            except Exception:
                 pass
         if pages:
-            pages[0].save(out, save_all=True, append_images=pages[1:])
+            # format="PDF" es obligatorio — Pillow no lo infiere de la extensión
+            pages[0].save(out, format="PDF", save_all=True, append_images=pages[1:])
     else:
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
             for f in files:
@@ -326,7 +345,7 @@ def pack_folder(src: str, out: str, fmt: str) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  INTERFAZ Y MENÚS
+#  HELPERS UI
 # ══════════════════════════════════════════════════════════════════════════════
 def _safe(s: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "", s).strip()
@@ -347,6 +366,9 @@ def _parse_positions(s: str, length: int) -> list:
     return sorted(i - 1 for i in idxs if 1 <= i <= length)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  DESCARGA
+# ══════════════════════════════════════════════════════════════════════════════
 def show_and_download(slug: str) -> None:
     print(f"\n{C.CYAN}[*] Cargando '{slug}'…{C.END}")
     meta = parse_series_meta(slug)
@@ -412,7 +434,6 @@ def show_and_download(slug: str) -> None:
         if selection.lower() == "all"
         else [chapters[i] for i in _parse_positions(selection, len(chapters))]
     )
-
     if not selected:
         return
 
@@ -457,7 +478,9 @@ def show_and_download(slug: str) -> None:
     print(f"\n{C.GREEN}[+] {ok}/{len(selected)} completados  → {out_folder}/{C.END}")
 
 
-# ── Menú Paginado Inteligente ──
+# ══════════════════════════════════════════════════════════════════════════════
+#  MENÚ PAGINADO
+# ══════════════════════════════════════════════════════════════════════════════
 def paginated_menu(base_path: str, label: str) -> None:
     current_page = 1
     cache = {}
@@ -465,29 +488,33 @@ def paginated_menu(base_path: str, label: str) -> None:
     while True:
         if current_page not in cache:
             print(f"\n  {C.CYAN}[*] Cargando página {current_page}…{C.END}")
-            urls_to_try = [
-                f"{SITE_URL}{base_path}?page={current_page}",
-                f"{SITE_URL}{base_path}/{current_page}",
-                f"{SITE_URL}{base_path}/page/{current_page}",
-            ]
-
-            if current_page == 1:
-                urls_to_try = [f"{SITE_URL}{base_path}"]
+            urls_to_try = (
+                [f"{SITE_URL}{base_path}"]
+                if current_page == 1
+                else [
+                    f"{SITE_URL}{base_path}?page={current_page}",
+                    f"{SITE_URL}{base_path}/{current_page}",
+                    f"{SITE_URL}{base_path}/page/{current_page}",
+                ]
+            )
 
             batch = []
             for url in urls_to_try:
-                if not url:
-                    continue
                 html = fetch_html(url)
-                if html:
-                    cand = _parse_cards(html)
-                    # Prevención bucle infinito si el server devuelve pag 1
-                    if current_page > 1 and 1 in cache and cand:
-                        if [c["slug"] for c in cand] == [c["slug"] for c in cache[1]]:
-                            continue
-                    if cand:
-                        batch = cand
-                        break
+                if not html:
+                    continue
+                cand = _parse_cards(html)
+                if not cand:
+                    continue
+                # Evitar loop infinito: si página N devuelve lo mismo que N-1
+                prev = cache.get(current_page - 1, [])
+                if prev and [c["slug"] for c in cand] == [c["slug"] for c in prev]:
+                    dbg(
+                        f"Página {current_page} == página {current_page - 1}, fin del catálogo"
+                    )
+                    continue
+                batch = cand
+                break
 
             cache[current_page] = batch
 
@@ -505,7 +532,9 @@ def paginated_menu(base_path: str, label: str) -> None:
         print(f"  {'━' * 58}")
 
         nav = []
-        if len(items) >= 10:
+        # Mostrar "siguiente" solo si esta página tiene resultados
+        # (no basar en len >= 10 — puede haber exactamente 10 en la última)
+        if items:
             nav.append(f"{C.CYAN}n{C.END}=sig")
         if current_page > 1:
             nav.append(f"{C.CYAN}p{C.END}=ant")
@@ -513,7 +542,7 @@ def paginated_menu(base_path: str, label: str) -> None:
         print("  " + "  ".join(nav) + "  o número")
 
         sel = input(f"\n  {C.YELLOW}➜ {C.END}").strip().lower()
-        if sel == "n" and len(items) >= 10:
+        if sel == "n" and items:
             current_page += 1
         elif sel == "p" and current_page > 1:
             current_page -= 1
@@ -526,32 +555,35 @@ def paginated_menu(base_path: str, label: str) -> None:
                 input(f"\n  {C.CYAN}Enter para continuar…{C.END}")
 
 
-# ── Opción 1: Buscar/URL ──
+# ══════════════════════════════════════════════════════════════════════════════
+#  OPCIÓN 1 — BUSCAR / URL
+# ══════════════════════════════════════════════════════════════════════════════
 def option1() -> None:
     raw = input(f"  {C.CYAN}URL, nombre o slug ➜ {C.END}").strip()
     if not raw:
         return
 
+    # URL directa
     m = re.search(r"18mh\.org/manga/([^/?#]+)", raw)
     if m:
         show_and_download(m.group(1))
         return
 
-    if (
-        " " not in raw
-        and not raw.startswith("http")
-        and re.match(r"^[a-zA-Z0-9\-]+$", raw)
-    ):
+    # Slug directo: letras, números, guiones, guiones bajos
+    if " " not in raw and not raw.startswith("http") and re.match(r"^[\w\-]+$", raw):
         test = parse_series_meta(raw)
         if test and test.get("mid"):
             show_and_download(raw)
             return
 
+    # Búsqueda por nombre
     path = f"/s/{quote(raw)}"
     paginated_menu(path, f"Búsqueda: {raw}")
 
 
-# ── Opción 2: Catálogo ──
+# ══════════════════════════════════════════════════════════════════════════════
+#  OPCIÓN 2 — CATÁLOGO
+# ══════════════════════════════════════════════════════════════════════════════
 _CAT_OPTS = {
     "0": ("/manga", "Todas las Series"),
     "1": ("/hots", "人氣推薦 (Recomendadas)"),
@@ -574,13 +606,35 @@ def catalog_menu() -> None:
             break
         if op not in _CAT_OPTS:
             continue
-
         path, lbl = _CAT_OPTS[op]
         paginated_menu(path, lbl)
 
 
-# ── Menú Principal ──
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════════════════════
+def check_deps() -> None:
+    missing = []
+    try:
+        import requests
+    except ImportError:
+        missing.append("requests")
+    try:
+        import bs4
+    except ImportError:
+        missing.append("beautifulsoup4")
+    try:
+        import lxml
+    except ImportError:
+        missing.append("lxml")
+    if missing:
+        print(f"\n{C.RED}Faltan dependencias:{C.END} {', '.join(missing)}")
+        print(f"  pip install {' '.join(missing)}\n")
+        sys.exit(1)
+
+
 def main() -> None:
+    check_deps()
     print(f"{C.DIM}Iniciando sesión en {SITE_URL}…{C.END}", end=" ", flush=True)
     _get_raw(SITE_URL)
     print(f"✓{C.END}")
@@ -594,7 +648,12 @@ def main() -> None:
             f"  ├─ {C.BOLD}2.{C.END} Catálogo {C.DIM}(Populares / Recientes / Manhwa){C.END}"
         )
         print(f"  └─ {C.BOLD}3.{C.END} Salir")
-        print(f"\n  {C.DIM}Config: {OUTPUT_TYPE.upper()}  {USER_FORMAT.upper()}{C.END}")
+        print(
+            f"\n  {C.DIM}Config: {OUTPUT_TYPE.upper()}  {USER_FORMAT.upper()}"
+            f"  workers {MAX_WORKERS}  delay {REQUEST_DELAY}s{C.END}"
+        )
+        if DEBUG:
+            print(f"  {C.YELLOW}[debug activo]{C.END}")
 
         op = input(f"\n  {C.YELLOW}Opción ➜ {C.END}").strip()
         if op == "1":
