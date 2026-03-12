@@ -585,7 +585,6 @@ def option1() -> None:
 #  OPCIÓN 2 — CATÁLOGO
 # ══════════════════════════════════════════════════════════════════════════════
 _CAT_OPTS = {
-    "0": ("/manga", "Todas las Series"),
     "1": ("/hots", "人氣推薦 (Recomendadas)"),
     "2": ("/dayup", "熱門更新 (Populares)"),
     "3": ("/newss", "最新上架 (Recientes)"),
@@ -593,10 +592,123 @@ _CAT_OPTS = {
 }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  OPCIÓN 0 DEL CATÁLOGO — TODAS LAS SERIES SIN PAGINACIÓN
+# ══════════════════════════════════════════════════════════════════════════════
+def fetch_all_series() -> list:
+    """
+    Descarga todas las páginas de /manga en paralelo y devuelve
+    la lista completa de series sin repeticiones, en orden.
+    """
+    print(f"\n  {C.CYAN}[*] Descargando catálogo completo…{C.END}")
+
+    # ── Paso 1: detectar cuántas páginas hay ────────────────────────────────
+    html1 = fetch_html(f"{SITE_URL}/manga")
+    if not html1:
+        print(f"  {C.RED}No se pudo acceder al catálogo.{C.END}")
+        return []
+
+    total_pages = 1
+    soup1 = _soup(html1)
+    # Buscar el número más alto en los links de paginación
+    for a in soup1.find_all("a", href=re.compile(r"/manga/page/(\d+)")):
+        m = re.search(r"/manga/page/(\d+)", a["href"])
+        if m:
+            total_pages = max(total_pages, int(m.group(1)))
+
+    # Si no encontró paginación en el HTML, hacer sondeo binario rápido
+    if total_pages == 1:
+        dbg("No se encontró paginación en HTML, sondeando…")
+        lo, hi = 1, 200
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            probe = fetch_html(f"{SITE_URL}/manga/page/{mid}")
+            if probe and _parse_cards(probe):
+                lo = mid
+            else:
+                hi = mid - 1
+        total_pages = lo
+
+    dbg(f"Total páginas detectadas: {total_pages}")
+    sys.stdout.write(
+        f"\r  {C.DIM}  {total_pages} páginas detectadas, descargando…{C.END}   "
+    )
+    sys.stdout.flush()
+
+    # ── Paso 2: descargar todas en paralelo ─────────────────────────────────
+    results: dict = {1: _parse_cards(html1)}  # página 1 ya la tenemos
+
+    def _fetch_page(p: int):
+        html = fetch_html(f"{SITE_URL}/manga/page/{p}")
+        return p, _parse_cards(html) if html else []
+
+    pages_to_fetch = list(range(2, total_pages + 1))
+    done = 1
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as exe:
+        futures = {exe.submit(_fetch_page, p): p for p in pages_to_fetch}
+        for fut in as_completed(futures):
+            p, cards = fut.result()
+            results[p] = cards
+            done += 1
+            sys.stdout.write(f"\r  {C.DIM}  Páginas: {done}/{total_pages}  …{C.END}   ")
+            sys.stdout.flush()
+
+    # ── Paso 3: ensamblar en orden, sin duplicados ───────────────────────────
+    all_items: list = []
+    seen_slugs: set = set()
+    for p in range(1, total_pages + 1):
+        for item in results.get(p, []):
+            if item["slug"] not in seen_slugs:
+                seen_slugs.add(item["slug"])
+                all_items.append(item)
+
+    print(
+        f"\r  {C.GREEN}✓ {len(all_items)} series encontradas "
+        f"en {total_pages} páginas.{C.END}        \n"
+    )
+    return all_items
+
+
+def list_all_series_menu() -> None:
+    """Muestra todas las series en un único listado largo y permite seleccionar."""
+    items = fetch_all_series()
+
+    if not items:
+        print(f"  {C.RED}No se pudieron obtener series.{C.END}")
+        input(f"\n  {C.CYAN}Enter para volver…{C.END}")
+        return
+
+    while True:
+        header()
+        print(f"  {C.PURPLE}{C.BOLD}Todas las Series  ({len(items)} total){C.END}")
+        print(f"  {'━' * 58}")
+        for i, r in enumerate(items):
+            print(f"  {C.BOLD}{i + 1:4d}.{C.END} {r['title'][:52]}")
+            print(f"         {C.DIM}{r['slug']}{C.END}")
+        print(f"  {'━' * 58}")
+        print(f"  {C.CYAN}q{C.END}=volver  o número para descargar")
+
+        sel = input(f"\n  {C.YELLOW}➜ {C.END}").strip().lower()
+        if sel == "q":
+            break
+        elif sel.isdigit():
+            idx = int(sel) - 1
+            if 0 <= idx < len(items):
+                show_and_download(items[idx]["slug"])
+                input(f"\n  {C.CYAN}Enter para continuar…{C.END}")
+            else:
+                print(f"  {C.RED}Número fuera de rango.{C.END}")
+
+
 def catalog_menu() -> None:
     while True:
         header()
         print(f"  {C.PURPLE}{C.BOLD}Catálogo{C.END}")
+        print(
+            f"  {C.BOLD}0.{C.END} Todas las Series "
+            f"{C.DIM}(listado completo sin paginación){C.END}"
+        )
         for k, (_, lbl) in _CAT_OPTS.items():
             print(f"  {C.BOLD}{k}.{C.END} {lbl}")
         print(f"  {C.BOLD}q.{C.END} Volver")
@@ -604,10 +716,11 @@ def catalog_menu() -> None:
         op = input(f"\n  {C.YELLOW}Sección ➜ {C.END}").strip().lower()
         if op == "q":
             break
-        if op not in _CAT_OPTS:
-            continue
-        path, lbl = _CAT_OPTS[op]
-        paginated_menu(path, lbl)
+        elif op == "0":
+            list_all_series_menu()
+        elif op in _CAT_OPTS:
+            path, lbl = _CAT_OPTS[op]
+            paginated_menu(path, lbl)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
