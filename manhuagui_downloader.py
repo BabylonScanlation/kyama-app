@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════╗
-║  MANHUAGUI DOWNLOADER  v1.0.0            ║
+║  MANHUAGUI DOWNLOADER  v1.1.0            ║
 ║  manhuagui.com  /  飒漫乐画               ║
 ╚══════════════════════════════════════════╝
 
@@ -39,8 +39,6 @@ class UnpackingError(Exception):
 
 
 def detect_packer(source):
-    """Detects whether `source` is P.A.C.K.E.R. coded."""
-    # Relajado para escaped y espacios variables
     return (
         re.search(
             r"(eval|window\['eval'\])\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,",
@@ -53,8 +51,6 @@ def detect_packer(source):
 
 def unpack_packer(source: str) -> str:
     source = source.replace('window["\\x65\\x76\\x61\\x6c"]', "eval")
-    # Optimización: reemplazamos '(.*?)' por algo más estricto que evite el DOTALL costoso si la cadena crece
-    # Usamos (?:\\\\'|[^'])* para coincidir con cualquier cosa que no sea una comilla simple o sea una comilla simple escapada.
     match = re.search(
         r"}\s*\(\s*'((?:\\'|[^'])*)'\s*,\s*(\d+|\[\])\s*,\s*(\d+)\s*,\s*'((?:\\'|[^'])*)'[^,]*?,\s*0\s*,\s*\{\}\s*\)\)",
         source,
@@ -64,25 +60,19 @@ def unpack_packer(source: str) -> str:
         a = list(match.groups())
         if a[1] == "[]":
             a[1] = 62
-
         payload = a[0]
         radix = int(a[1])
         count = int(a[2])
         symtab_str = a[3]
-
-        # ¡EL TRUCO DE MANHUAGUI! Si parece Base64, descomprímelo primero
         if "|" not in symtab_str and len(symtab_str) > 20:
             decomp = lzstring_decompress_base64(symtab_str)
             if decomp:
                 symtab_str = decomp
-
         symtab = symtab_str.split("|")
-
         if count != len(symtab):
             raise UnpackingError(
                 f"Malformed p.a.c.k.e.r. symtab. Expected {count}, got {len(symtab)}"
             )
-
         unbase = Unbaser(radix)
 
         def lookup(match_obj):
@@ -96,9 +86,7 @@ def unpack_packer(source: str) -> str:
             return word
 
         payload = payload.replace("\\\\", "\\").replace("\\'", "'")
-        # Usamos regex \b[0-9a-zA-Z]+\b para no romper los reemplazos Base62
         source = re.sub(r"\b[0-9a-zA-Z]+\b", lookup, payload)
-
         return source
     raise UnpackingError("Could not make sense of p.a.c.k.e.r data.")
 
@@ -114,12 +102,10 @@ class Unbaser:
         if 2 <= base <= 36:
             self.unbase = lambda s: int(s, base)
         else:
-            # Si usa una base rara (ej. 58), usamos el alfabeto de 62 caracteres que es compatible
             alphabet = self.ALPHABET.get(base, self.ALPHABET[62])
             self.dictionary = {c: i for i, c in enumerate(alphabet)}
             self.unbase = self._dictunbaser
 
-    # ESTO ES LO QUE FALTABA: Permite usar la clase como función
     def __call__(self, string):
         return self.unbase(string)
 
@@ -130,27 +116,23 @@ class Unbaser:
         return ret
 
 
-# ==========================================
-#   CONFIGURACIÓN (editá aquí)
-# ==========================================
+# ══════════════════════════════════════════════════════════════════════════════
+#  CONFIGURACIÓN
+# ══════════════════════════════════════════════════════════════════════════════
 OUTPUT_TYPE = "zip"  # 'zip' | 'cbz' | 'pdf'
 USER_FORMAT = "webp"  # 'original' | 'jpg' | 'png' | 'webp'
 DELETE_TEMP = True
 MAX_WORKERS = 8
-REQUEST_DELAY = 0.5  # segundos entre peticiones
-# ==========================================
+REQUEST_DELAY = 0.5
+MAX_RESULTS = 20
 
 BASE = "https://www.manhuagui.com"
-IMG_HOST = "https://i.hamreus.com"  # CDN principal de imágenes
+IMG_HOST = "https://i.hamreus.com"
 
 SESS = requests.Session()
 SESS.headers.update(
     {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Referer": BASE + "/",
         "Accept-Language": "zh-CN,zh;q=0.9",
         "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
@@ -160,7 +142,6 @@ SESS.headers.update(
 _CACHE: dict[str, dict] = {}
 
 
-# ── colores ─────────────────────────────────────────────────────────────────
 class C:
     PU = "\033[95m"
     CY = "\033[96m"
@@ -175,28 +156,22 @@ class C:
 def header():
     os.system("cls" if os.name == "nt" else "clear")
     print(f"{C.BL}╔══════════════════════════════════════════╗")
-    print(f"║ {C.BO}MANHUAGUI DOWNLOADER v1.0.0{C.EN}{C.BL}               ║")
+    print(f"║ {C.BO}MANHUAGUI DOWNLOADER v1.1.0{C.EN}{C.BL}               ║")
     print(f"║ {C.CY}manhuagui.com{C.EN}{C.BL}                             ║")
     print(f"╚══════════════════════════════════════════╝{C.EN}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  LZSTRING  —  pure-Python port of lz-string.js
-#  Fuente: https://github.com/pieroxy/lz-string
+#  LZSTRING
 # ══════════════════════════════════════════════════════════════════════════════
 _B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
 _B64_MAP = {ch: i for i, ch in enumerate(_B64_CHARS)}
 
 
 def lzstring_decompress_base64(compressed: str) -> str:
-    """
-    LZString.decompressFromBase64 — pure-Python port verificado.
-    lz-string.js v1.4.4  (https://github.com/pieroxy/lz-string)
-    """
     if not compressed:
         return ""
     safe = lambda i: _B64_MAP.get(compressed[i], 0) if i < len(compressed) else 0
-
     dv = safe(0)
     dp = 32
     di = 1
@@ -236,7 +211,6 @@ def lzstring_decompress_base64(compressed: str) -> str:
         if di > len(compressed):
             return ""
         c = rb(1 << numBits)
-
         if c == 0:
             dictionary.append(chr(rb(256)))
             c = dictSize
@@ -249,11 +223,9 @@ def lzstring_decompress_base64(compressed: str) -> str:
             enlargeIn -= 1
         elif c == 2:
             return "".join(result)
-
         if enlargeIn == 0:
             enlargeIn = 1 << numBits
             numBits += 1
-
         entry = (
             dictionary[c]
             if c < len(dictionary)
@@ -263,57 +235,14 @@ def lzstring_decompress_base64(compressed: str) -> str:
         )
         if entry is None:
             return "".join(result)
-
         result.append(entry)
         dictionary.append(w + entry[0])
         dictSize += 1
         enlargeIn -= 1
-
         if enlargeIn == 0:
             enlargeIn = 1 << numBits
             numBits += 1
         w = entry
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  EXTRACTOR DE BASE64  (manhuagui chapter pages)
-#
-#  El script del capítulo está obfuscado con Dean Edwards P.A.C.K.E.R.:
-#    eval(function(p,a,c,k,e,d){...}('payload', 62, N, 'k0|k1|...|BASE64|...'))
-#  La cadena base64 larga es el JSON comprimido con LZString.
-#  Estrategia: extraer las keys del packer → buscar la más larga y válida.
-#  Fallback: regex directo sobre el HTML.
-# ══════════════════════════════════════════════════════════════════════════════
-def _extract_b64_from_script(source: str) -> str:
-    m0 = re.search(r'atob\(["\']([A-Za-z0-9+/=]{300,})["\']\)', source)
-    if m0:
-        return m0.group(1)
-    # Intento 0: direct decompressFromBase64('b64')
-    m0 = re.search(
-        r'decompressFromBase64\s*\(\s*["\']([A-Za-z0-9+/=]{300,})["\']\s*\)', source
-    )
-    if m0:
-        return m0.group(1)
-    # Intento 1: keys del packer (Corregido para evitar Catastrophic Backtracking)
-    m = re.search(r"'([^']{100,})'\s*\.split\(['\"]?\|['\"]?\)", source)
-    if m:
-        keys = m.group(1).split("|")
-        b64 = [k for k in keys if len(k) > 100 and re.fullmatch(r"[A-Za-z0-9+/=]+", k)]
-        if b64:
-            return max(b64, key=len)
-    # Intento 2: regex directo
-    m2 = re.search(r"[A-Za-z0-9+/=]{300,}", source)
-    if m2:
-        return m2.group(0)
-    # Intento 3: cInfo var
-    m3 = re.search(r"cInfo\s*=\s*['\"]([A-Za-z0-9+/=]{300,})['\"];", source)
-    if m3:
-        return m3.group(1)
-    # Intento 4: return 'b64';
-    m4 = re.search(r"return\s*['\"]?([A-Za-z0-9+/=]{300,})['\"]?;", source)
-    if m4:
-        return m4.group(1)
-    return ""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -343,7 +272,6 @@ def _soup(url: str) -> BeautifulSoup | None:
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  FILTROS / CATEGORÍAS
-#  El sitio usa /list/{slug}/ para cada filtro.
 # ══════════════════════════════════════════════════════════════════════════════
 REGIONS = {
     "全部": "",
@@ -399,19 +327,12 @@ STATUS = {"全部": "", "连载": "lianzai", "完结": "wanjie"}
 
 
 def _build_list_url(region="", genre="", audience="", status="", page=1) -> str:
-    """Construye la URL de /list/ con los filtros combinados."""
     parts = [p for p in [region, genre, audience, status] if p]
     slug = "_".join(parts) if parts else ""
-
-    # Formato de Manhuagui:
-    # Pág 1: /list/ o /list/japan/
-    # Pág 2+: /list/index_p2.html o /list/japan/index_p2.html
     base_path = f"/list/{slug}/" if slug else "/list/"
-
     if page == 1:
         return f"{BASE}{base_path}"
-    else:
-        return f"{BASE}{base_path}index_p{page}.html"
+    return f"{BASE}{base_path}index_p{page}.html"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -428,11 +349,9 @@ def browse_page(
     series: list[dict] = []
     seen: set[str] = set()
 
-    # Usamos los mismos selectores robustos de la búsqueda
     items = soup.select(
         "#contList li, div.book-result li, ul.book-list li, div.book-list li"
     )
-
     for li in items:
         a = li.find("a", href=re.compile(r"/comic/\d+/"))
         if not a:
@@ -444,23 +363,18 @@ def browse_page(
         if cid in seen:
             continue
         seen.add(cid)
-
         title = a.get("title") or a.get_text(strip=True)
-        # Último capítulo (el <span> pequeño suele tenerlo)
         last = ""
         sp = li.find("span", class_="tt")
         if sp:
             last = sp.get_text(strip=True)
-
         series.append({"id": int(cid), "title": title[:60], "last": last})
 
-    # Paginación: buscar el mayor número de página con formato _p
     total = page
     for a in soup.select("a[href*='_p']"):
         m = re.search(r"_p(\d+)\.html", a["href"])
         if m:
             total = max(total, int(m.group(1)))
-
     m2 = re.search(r"共\s*(\d+)\s*页", soup.get_text())
     if m2:
         total = max(total, int(m2.group(1)))
@@ -468,16 +382,62 @@ def browse_page(
     return series, total
 
 
+def _load_all_pages(
+    region="", genre="", audience="", status="", workers=8
+) -> list[dict]:
+    """Carga todas las páginas del catálogo en paralelo y devuelve lista deduplicada."""
+    # Primera página para conocer el total
+    sys.stdout.write(f"  {C.YE}Detectando total de páginas...{C.EN}\r")
+    sys.stdout.flush()
+    first, total = browse_page(1, region, genre, audience, status)
+    if not first:
+        return []
+
+    all_series: list[dict] = []
+    seen: set[int] = set()
+    for s in first:
+        if s["id"] not in seen:
+            seen.add(s["id"])
+            all_series.append(s)
+
+    if total <= 1:
+        return all_series
+
+    sys.stdout.write(f"  {C.YE}Cargando {total} páginas en paralelo...{C.EN}\r")
+    sys.stdout.flush()
+
+    def _fetch(pg: int) -> list[dict]:
+        items, _ = browse_page(pg, region, genre, audience, status)
+        return items
+
+    done = 1
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_fetch, pg): pg for pg in range(2, total + 1)}
+        for fut in as_completed(futures):
+            done += 1
+            items = fut.result()
+            for s in items:
+                if s["id"] not in seen:
+                    seen.add(s["id"])
+                    all_series.append(s)
+            sys.stdout.write(
+                f"  {C.CY}[{done}/{total}] {len(all_series)} series cargadas{C.EN}   \r"
+            )
+            sys.stdout.flush()
+
+    print(f"  {C.GR}✔ {len(all_series)} series cargadas{C.EN}   ")
+    return all_series
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  BÚSQUEDA  /s/query.html
+#  BÚSQUEDA
 # ══════════════════════════════════════════════════════════════════════════════
 def search(query: str, page=1) -> tuple[list[dict], int]:
-    # Corregir la URL para respetar el formato de Manhuagui (_p2.html)
-    if page == 1:
-        url = f"{BASE}/s/{quote(query)}.html"
-    else:
-        url = f"{BASE}/s/{quote(query)}_p{page}.html"
-
+    url = (
+        f"{BASE}/s/{quote(query)}.html"
+        if page == 1
+        else f"{BASE}/s/{quote(query)}_p{page}.html"
+    )
     soup = _soup(url)
     if soup is None:
         return [], 0
@@ -500,13 +460,11 @@ def search(query: str, page=1) -> tuple[list[dict], int]:
         title = a.get("title") or a.get_text(strip=True)
         results.append({"id": int(cid), "title": title[:60], "last": ""})
 
-    # Detectar el total de páginas en la búsqueda
     total = page
     for a in soup.select("a[href*='_p']"):
         m = re.search(r"_p(\d+)\.html", a["href"])
         if m:
             total = max(total, int(m.group(1)))
-
     m2 = re.search(r"共\s*(\d+)\s*页", soup.get_text())
     if m2:
         total = max(total, int(m2.group(1)))
@@ -515,8 +473,7 @@ def search(query: str, page=1) -> tuple[list[dict], int]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  INFO DE SERIE  /comic/ID/
-#  La lista de capítulos está en #__VIEWSTATE → LZString.decompressFromBase64
+#  INFO DE SERIE
 # ══════════════════════════════════════════════════════════════════════════════
 def get_comic(comic_id: int) -> dict:
     key = str(comic_id)
@@ -527,7 +484,6 @@ def get_comic(comic_id: int) -> dict:
     if soup is None:
         return {}
 
-    # Título
     title = ""
     h1 = soup.find("h1")
     if h1:
@@ -537,16 +493,12 @@ def get_comic(comic_id: int) -> dict:
         if tt:
             title = re.sub(r"漫画|在线看|看漫画.*$", "", tt.string or "").strip()
 
-    # Descripción corta
     desc = ""
     intro = soup.select_one("div#intro-all, div.intro-all, p.intro")
     if intro:
         desc = intro.get_text(" ", strip=True)[:200]
 
-    # ── Capítulos ──────────────────────────────────────────────────────────
-    # El sitio esconde la lista en un <input id="__VIEWSTATE"> comprimido con LZString
     chapters: list[dict] = []
-
     vs_tag = soup.find("input", id="__VIEWSTATE") or soup.find(
         "input", attrs={"id": "__VIEWSTATE"}
     )
@@ -555,8 +507,6 @@ def get_comic(comic_id: int) -> dict:
         if vs_html:
             vs_soup = BeautifulSoup(vs_html, "lxml")
             chapters = _parse_chapters(vs_soup, comic_id)
-
-    # Fallback: capítulos en el HTML directo (si el sitio los incluye parcialmente)
     if not chapters:
         chapters = _parse_chapters(soup, comic_id)
 
@@ -575,8 +525,6 @@ def _parse_chapters(soup: BeautifulSoup, comic_id: int) -> list[dict]:
     chapters: list[dict] = []
     seen: set[str] = set()
 
-    # El HTML descomprimido tiene <h4> para grupos (单话, 单行本, etc.)
-    # y <ul class="chapter-list"> dentro de cada grupo
     for section in soup.select(".chapter-list, ul.chapter-list"):
         for a in section.find_all(
             "a", href=re.compile(rf"/comic/{comic_id}/\d+\.html")
@@ -589,7 +537,6 @@ def _parse_chapters(soup: BeautifulSoup, comic_id: int) -> list[dict]:
                 continue
             seen.add(chid)
             title = a.get("title") or a.get_text(strip=True)
-            # Número de páginas (el <span> tiny dentro del <a>)
             pages = ""
             sp = a.find("span")
             if sp:
@@ -603,16 +550,34 @@ def _parse_chapters(soup: BeautifulSoup, comic_id: int) -> list[dict]:
                 }
             )
 
-    # Los capítulos vienen de más nuevo a más viejo; invertimos para orden cronológico
     chapters.reverse()
     return chapters
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  IMÁGENES DE UN CAPÍTULO  /comic/ID/CHID.html
-#  El script del capítulo está empaquetado con P.A.C.K.E.R.
-#  Dentro hay una llamada a LZString.decompressFromBase64("...") con el JSON.
+#  IMÁGENES DE UN CAPÍTULO
 # ══════════════════════════════════════════════════════════════════════════════
+def _extract_b64_from_script(source: str) -> str:
+    m0 = re.search(r'atob\(["\']([A-Za-z0-9+/=]{300,})["\']\)', source)
+    if m0:
+        return m0.group(1)
+    m0 = re.search(
+        r'decompressFromBase64\s*\(\s*["\']([A-Za-z0-9+/=]{300,})["\']\s*\)', source
+    )
+    if m0:
+        return m0.group(1)
+    m = re.search(r"'([^']{100,})'\s*\.split\(['\"]?\|['\"]?\)", source)
+    if m:
+        keys = m.group(1).split("|")
+        b64 = [k for k in keys if len(k) > 100 and re.fullmatch(r"[A-Za-z0-9+/=]+", k)]
+        if b64:
+            return max(b64, key=len)
+    m2 = re.search(r"[A-Za-z0-9+/=]{300,}", source)
+    if m2:
+        return m2.group(0)
+    return ""
+
+
 def get_images(comic_id: int, chapter_id: int) -> list[str]:
     url = f"{BASE}/comic/{comic_id}/{chapter_id}.html"
     raw = _get(url)
@@ -626,8 +591,9 @@ def get_images(comic_id: int, chapter_id: int) -> list[str]:
     packed_block = None
     for script in scripts:
         if script.string:
-            content = script.string.strip()
-            content = content.replace('window["\\x65\\x76\\x61\\x6c"]', "eval")
+            content = script.string.strip().replace(
+                'window["\\x65\\x76\\x61\\x6c"]', "eval"
+            )
             if detect_packer(content):
                 packed_block = content
                 break
@@ -635,19 +601,16 @@ def get_images(comic_id: int, chapter_id: int) -> list[str]:
     if not packed_block:
         return []
 
-    unpacked = ""
     try:
         unpacked = unpack_packer(packed_block)
     except Exception:
         return []
 
-    # Variables a extraer
     files = []
     path = ""
     e_val = ""
     m_val = ""
 
-    # Estrategia 1: Intentar extraer el bloque JSON puro
     m_json = re.search(r'(\{.*"files".*\})', unpacked, re.DOTALL | re.IGNORECASE)
     if m_json:
         try:
@@ -660,41 +623,33 @@ def get_images(comic_id: int, chapter_id: int) -> list[str]:
         except Exception:
             pass
 
-    # Estrategia 2 (Fallback): Extraer directamente con Regex si el JSON falló
     if not files:
-        m_files = re.search(r'"files"\s*:\s*\[(.*?)\]', unpacked, re.IGNORECASE)
-        if m_files:
-            f_str = m_files.group(1)
-            # Limpiar comillas y espacios de cada nombre de archivo
+        mf = re.search(r'"files"\s*:\s*\[(.*?)\]', unpacked, re.IGNORECASE)
+        if mf:
+            f_str = mf.group(1)
             if f_str.strip():
                 files = [f.strip("\"' ") for f in f_str.split(",")]
-
-        m_path = re.search(r'"path"\s*:\s*"([^"]+)"', unpacked, re.IGNORECASE)
-        if m_path:
-            path = m_path.group(1)
-
-        m_e = re.search(r'"e"\s*:\s*(\d+|"[^"]+")', unpacked, re.IGNORECASE)
-        if m_e:
-            e_val = m_e.group(1).replace('"', "")
-
-        m_m = re.search(r'"m"\s*:\s*"([^"]+)"', unpacked, re.IGNORECASE)
-        if m_m:
-            m_val = m_m.group(1)
+        mp = re.search(r'"path"\s*:\s*"([^"]+)"', unpacked, re.IGNORECASE)
+        if mp:
+            path = mp.group(1)
+        me = re.search(r'"e"\s*:\s*(\d+|"[^"]+")', unpacked, re.IGNORECASE)
+        if me:
+            e_val = me.group(1).replace('"', "")
+        mm = re.search(r'"m"\s*:\s*"([^"]+)"', unpacked, re.IGNORECASE)
+        if mm:
+            m_val = mm.group(1)
 
     if not files:
         return []
 
-    # Construir las URLs finales
     urls = []
     for fname in files:
-        # Ignorar archivos vacíos por si la regex capturó comas extra
         if not fname:
             continue
         img_url = f"{IMG_HOST}{path}{fname}"
         if e_val or m_val:
             img_url += f"?e={e_val}&m={m_val}"
         urls.append(img_url)
-
     return urls
 
 
@@ -743,12 +698,10 @@ def _dl_one(args: tuple) -> bool:
     path = os.path.join(folder, f"{idx:03d}.{out_ext}")
     if os.path.exists(path):
         return True
-
-    # El CDN de manhuagui necesita el Referer del capítulo
-    headers = {"Referer": referer_url, "User-Agent": SESS.headers["User-Agent"]}
+    hdrs = {"Referer": referer_url, "User-Agent": SESS.headers["User-Agent"]}
     for attempt in range(3):
         try:
-            r = SESS.get(url, timeout=20, headers=headers)
+            r = SESS.get(url, timeout=20, headers=hdrs)
             if r.status_code == 200:
                 _save(r.content, path)
                 return True
@@ -766,15 +719,11 @@ def download_chapter(comic: dict, chapter: dict) -> str | None:
     chname = clean(chapter.get("title", "Cap"))[:40]
     cid = comic["id"]
     chid = chapter["id"]
-
-    # Directorio padre de la serie
     series_folder = f"{series} [{cid}]"
     os.makedirs(series_folder, exist_ok=True)
-
-    # Directorio temporal para el capítulo
     folder = os.path.join(series_folder, f"{chname} [{chid}]")
-
     os.makedirs(folder, exist_ok=True)
+
     print(f"\n  {C.GR}⬇  {series[:35]} / {chname}{C.EN}")
 
     imgs = get_images(cid, chid)
@@ -783,10 +732,9 @@ def download_chapter(comic: dict, chapter: dict) -> str | None:
         shutil.rmtree(folder, ignore_errors=True)
         return None
 
-    # Generar la URL del capítulo para el Referer
     chapter_url = f"{BASE}/comic/{cid}/{chid}.html"
-
     comp = 0
+
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         futs = [
             pool.submit(_dl_one, (url, folder, i, chapter_url))
@@ -876,7 +824,6 @@ def choose_chapters(comic_id: int):
 
 
 def _pick(label: str, options: dict) -> str:
-    """Muestra un menú de opciones y devuelve el slug elegido."""
     keys = list(options.keys())
     print(f"\n  {C.PU}{label}:{C.EN}")
     for i, k in enumerate(keys):
@@ -889,7 +836,68 @@ def _pick(label: str, options: dict) -> str:
         idx = int(sel) - 1
         if 0 <= idx < len(keys):
             return options[keys[idx]]
-    return ""  # "全部" → slug vacío
+    return ""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MENÚ DE RESULTADOS  (con toggle paginación)
+# ══════════════════════════════════════════════════════════════════════════════
+def _results_menu(series: list[dict], label: str, paginated: bool = True) -> None:
+    page = 0
+    PAGE = MAX_RESULTS
+    while True:
+        header()
+        if paginated:
+            start = page * PAGE
+            end = min(start + PAGE, len(series))
+            chunk = series[start:end]
+        else:
+            start = 0
+            end = len(series)
+            chunk = series
+
+        print(f" {C.PU}── {label}  ({start + 1}–{end} de {len(series)}) ──{C.EN}\n")
+        for i, s in enumerate(chunk):
+            num = start + i + 1
+            last = f"  {C.CY}{s['last'][:25]}{C.EN}" if s.get("last") else ""
+            print(
+                f"  {C.BO}{num:>4}.{C.EN} [{C.GR}{s['id']}{C.EN}] {s['title'][:55]}{last}"
+            )
+
+        nav = []
+        if paginated and end < len(series):
+            nav.append(f"{C.CY}n{C.EN}=siguiente")
+        if paginated and page > 0:
+            nav.append(f"{C.CY}p{C.EN}=anterior")
+        nav.append(
+            f"{C.CY}t{C.EN}={'ver todo sin paginación' if paginated else 'volver a paginado'}"
+        )
+        nav.append(f"{C.CY}q{C.EN}=volver")
+        print("\n " + "  ".join(nav) + "  — número para descargar")
+
+        cmd = input(f"\n{C.YE} Acción ➜ {C.EN}").strip().lower()
+        if cmd == "n" and paginated and end < len(series):
+            page += 1
+        elif cmd == "p" and paginated and page > 0:
+            page -= 1
+        elif cmd == "t":
+            paginated = not paginated
+            page = 0
+        elif cmd == "q":
+            break
+        elif cmd.isdigit():
+            idx = int(cmd) - 1
+            if 0 <= idx < len(series):
+                choose_chapters(series[idx]["id"])
+                input(f"\n{C.GR} Enter para continuar...{C.EN}")
+                break
+        elif "," in cmd or "-" in cmd:
+            idxs = parse_sel(cmd, len(series))
+            if idxs:
+                for idx in idxs:
+                    choose_chapters(series[idx]["id"])
+                input(f"\n{C.GR} Cola terminada. Enter...{C.EN}")
+                break
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -908,7 +916,6 @@ def menu_download():
     if not val:
         return
 
-    # URL de capítulo directo
     m = re.search(r"/comic/(\d+)/(\d+)\.html", val)
     if m:
         cid, chid = int(m.group(1)), int(m.group(2))
@@ -918,10 +925,6 @@ def menu_download():
         input(f"\n{C.GR} Listo. Enter para volver...{C.EN}")
         return
 
-    # URL o ID de serie
-    m = re.search(r"/comic/(\d+)/", val) or (
-        re.fullmatch(r"\d+", val) and type("", (object,), {"group": lambda s, n: val})()
-    )
     if re.search(r"/comic/(\d+)/", val):
         choose_chapters(int(re.search(r"/comic/(\d+)/", val).group(1)))
         return
@@ -929,10 +932,9 @@ def menu_download():
         choose_chapters(int(val))
         return
 
-    # Búsqueda por texto interactiva
+    # Búsqueda por texto
     page = 1
     total_pgs = 1
-
     while True:
         header()
         print(f"\n  {C.YE}🔎 Buscando '{val}' (Página {page})...{C.EN}")
@@ -947,7 +949,6 @@ def menu_download():
         for i, s in enumerate(results):
             print(f"  {i + 1:>3}. [{C.GR}{s['id']}{C.EN}] {s['title']}")
 
-        # Mostrar controles de paginación si hay más de una página
         if total_pgs > 1:
             print(
                 f"\n {C.CY}n{C.EN} siguiente  {C.CY}p{C.EN} anterior  {C.CY}q{C.EN} cancelar  —  número para descargar"
@@ -981,7 +982,7 @@ def menu_download():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MENÚ 2: EXPLORAR CATÁLOGO CON FILTROS
+#  MENÚ 2: EXPLORAR CATÁLOGO
 # ══════════════════════════════════════════════════════════════════════════════
 def menu_browse():
     header()
@@ -993,76 +994,44 @@ def menu_browse():
     audience = _pick("Público", AUDIENCE)
     status = _pick("Estado", STATUS)
 
-    page = 1
-    total_pgs = 999
-    cache_pg: dict[int, list[dict]] = {}
-
-    while True:
-        header()
-        filter_str = (
-            " | ".join(
-                filter(
-                    None,
-                    [
-                        next((k for k, v in REGIONS.items() if v == region and v), ""),
-                        next((k for k, v in GENRES.items() if v == genre and v), ""),
-                        next(
-                            (k for k, v in AUDIENCE.items() if v == audience and v), ""
-                        ),
-                        next((k for k, v in STATUS.items() if v == status and v), ""),
-                    ],
-                )
+    filter_str = (
+        " | ".join(
+            filter(
+                None,
+                [
+                    next((k for k, v in REGIONS.items() if v == region and v), ""),
+                    next((k for k, v in GENRES.items() if v == genre and v), ""),
+                    next((k for k, v in AUDIENCE.items() if v == audience and v), ""),
+                    next((k for k, v in STATUS.items() if v == status and v), ""),
+                ],
             )
-            or "全部"
         )
-        print(f" {C.PU}── [{filter_str}]  Página {page}/{total_pgs} ──{C.EN}\n")
+        or "全部"
+    )
 
-        if page not in cache_pg:
-            print(f"  {C.YE}⚡ Cargando...{C.EN}", end="\r")
-            series, total_pgs = browse_page(page, region, genre, audience, status)
-            cache_pg[page] = series
-        else:
-            series = cache_pg[page]
+    print(f"\n  {C.YE}⚡ Cargando catálogo [{filter_str}]...{C.EN}")
+    all_series = _load_all_pages(region, genre, audience, status)
 
-        header()
-        print(f" {C.PU}── [{filter_str}]  Página {page}/{total_pgs} ──{C.EN}\n")
+    if not all_series:
+        print(f"  {C.RE}Sin resultados.{C.EN}")
+        time.sleep(2)
+        return
 
-        if not series:
-            print(f"  {C.RE}Sin resultados.{C.EN}")
-        else:
-            for i, s in enumerate(series):
-                last = f"  {C.CY}{s['last'][:25]}{C.EN}" if s.get("last") else ""
-                print(f"  {i + 1:>3}. [{C.GR}{s['id']}{C.EN}] {s['title'][:55]}{last}")
+    # Filtro opcional por nombre en memoria
+    ft = input(f"  {C.CY}Filtrar por nombre (Enter = mostrar todo): {C.EN}").strip()
+    if ft:
+        all_series = [s for s in all_series if ft.lower() in s["title"].lower()]
+    if not all_series:
+        print(f"  {C.RE}Sin resultados para '{ft}'.{C.EN}")
+        time.sleep(2)
+        return
 
-        print(
-            f"\n {C.CY}n{C.EN} siguiente  {C.CY}p{C.EN} anterior  "
-            f"{C.CY}f{C.EN} cambiar filtros  {C.CY}q{C.EN} volver  "
-            f"— número para descargar"
-        )
-
-        cmd = input(f"\n{C.YE} Acción ➜ {C.EN}").strip().lower()
-
-        if cmd == "q":
-            break
-        elif cmd == "n" and page < total_pgs:
-            page += 1
-        elif cmd == "p" and page > 1:
-            page -= 1
-        elif cmd == "f":
-            # Cambiar filtros sin salir del explorador
-            region = _pick("Región", REGIONS)
-            genre = _pick("Género", GENRES)
-            audience = _pick("Público", AUDIENCE)
-            status = _pick("Estado", STATUS)
-            page = 1
-            cache_pg.clear()
-        elif cmd.isdigit():
-            idx = int(cmd) - 1
-            if series and 0 <= idx < len(series):
-                choose_chapters(series[idx]["id"])
-            else:
-                print(f"  {C.RE}Número fuera de rango.{C.EN}")
-                time.sleep(1)
+    modo = (
+        input(f"  {C.CY}¿Con paginación? (Enter=sí / n=todo de una vez): {C.EN}")
+        .strip()
+        .lower()
+    )
+    _results_menu(all_series, filter_str, paginated=(modo != "n"))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1076,10 +1045,7 @@ def main():
         print(f" {C.BO}2.{C.EN} Explorar   catálogo con filtros")
         print(f" {C.BO}3.{C.EN} Salir\n")
         print(
-            f" {C.PU}Config:{C.EN}"
-            f" salida={C.CY}{OUTPUT_TYPE.upper()}{C.EN}"
-            f"  imagen={C.CY}{USER_FORMAT.upper()}{C.EN}"
-            f"  workers={C.CY}{MAX_WORKERS}{C.EN}"
+            f" {C.PU}Config:{C.EN} salida={C.CY}{OUTPUT_TYPE.upper()}{C.EN}  imagen={C.CY}{USER_FORMAT.upper()}{C.EN}  workers={C.CY}{MAX_WORKERS}{C.EN}"
         )
 
         op = input(f"\n{C.YE} Opción ➜ {C.EN}").strip()

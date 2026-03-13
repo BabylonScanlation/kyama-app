@@ -1,26 +1,6 @@
-﻿def _detect_total_pages(soup, html):
-    """Detecta el total de paginas. Ignora URLs de capitulos."""
-    for sel in [".nav-links", ".pagination", ".wp-pagenavi", ".page-numbers"]:
-        container = soup.select_one(sel)
-        if not container:
-            continue
-        nums = []
-        for a in container.find_all("a"):
-            href = a.get("href", "")
-            if "/manga/" in href:
-                continue
-            m = re.search(r"/page/(\d+)", href)
-            if m:
-                nums.append(int(m.group(1)))
-        if nums:
-            return max(nums)
-    nums = re.findall(r"/blgl/page/(\d+)", html)
-    return max(int(n) for n in nums) if nums else 1
-
-
-"""
+﻿"""
 ╔══════════════════════════════════════════╗
-║  BAKAMH DOWNLOADER  v1.0                 ║
+║  BAKAMH DOWNLOADER  v1.1                 ║
 ║       bakamh.com — 巴卡漫画              ║
 ╚══════════════════════════════════════════╝
 
@@ -129,7 +109,6 @@ def err(msg):
 
 
 def clr():
-    # os.system("cls" if os.name == "nt" else "clear")
     pass
 
 
@@ -137,7 +116,7 @@ def banner(sub=""):
     clr()
     print(f"{C.BL}╔══════════════════════════════════════════╗{C.EN}")
     print(
-        f"{C.BL}║{C.EN}  {C.BO}{C.PU}BAKAMH DOWNLOADER{C.EN}  {C.CY}v1.0{C.EN}               {C.BL}║{C.EN}"
+        f"{C.BL}║{C.EN}  {C.BO}{C.PU}BAKAMH DOWNLOADER{C.EN}  {C.CY}v1.1{C.EN}               {C.BL}║{C.EN}"
     )
     if sub:
         s = sub[:40]
@@ -226,15 +205,12 @@ def _soup(html):
 def parse_input(raw):
     """Devuelve slug del manga (puede ser chino o inglés)."""
     raw = raw.strip().rstrip("/")
-    # URL completa
     m = re.search(r"bakamh\.com/manga/([^/?#]+)", raw)
     if m:
         return unquote(m.group(1))
-    # Sin dominio pero con /manga/
     m = re.search(r"/manga/([^/?#]+)", raw)
     if m:
         return unquote(m.group(1))
-    # Slug directo (sin espacios)
     if raw and " " not in raw and not raw.startswith("http"):
         return raw
     return raw
@@ -244,10 +220,6 @@ def parse_input(raw):
 #  INFO DEL MANGA
 # ══════════════════════════════════════════════════════════════════════════════
 def get_manga_info(slug):
-    """
-    Carga la página del manga y extrae metadata + lista de capítulos.
-    slug puede contener caracteres chinos (los encodeamos para la URL).
-    """
     encoded = quote(slug, safe="")
     url = f"{BASE_URL}/manga/{encoded}/"
     dbg(f"Manga URL: {url}")
@@ -262,7 +234,6 @@ def get_manga_info(slug):
     if not soup:
         return None, []
 
-    # ── Título ────────────────────────────────────────────────────────────────
     title = ""
     for sel in [
         ".post-title h1",
@@ -278,10 +249,8 @@ def get_manga_info(slug):
     if not title:
         title = slug
 
-    # ── Metadata ──────────────────────────────────────────────────────────────
     author = _meta_field(soup, ".author-content a, .manga-authors a")
     artist = _meta_field(soup, ".artist-content a")
-    # Status: evitar agarrar el bloque de rating — buscar textos cortos
     status = ""
     for sel in [
         ".post-status .summary-content",
@@ -291,7 +260,6 @@ def get_manga_info(slug):
         el = soup.select_one(sel)
         if el:
             txt = el.get_text(strip=True)
-            # El status es corto: "连载中", "已完结", "Ongoing", etc.
             if txt and len(txt) < 20:
                 status = txt
                 break
@@ -313,7 +281,6 @@ def get_manga_info(slug):
     }
     dbg(f"Meta: {meta}")
 
-    # ── Capítulos ─────────────────────────────────────────────────────────────
     chapters = _chapters_from_html(soup, slug)
     if not chapters:
         dbg("  No hay capítulos en HTML — probando AJAX...")
@@ -331,7 +298,6 @@ def _meta_field(soup, selector):
 
 
 def _manga_id(soup, html):
-    # data-id en el holder de capítulos
     el = soup.select_one("#manga-chapters-holder, [data-id]")
     if el and el.get("data-id"):
         return el["data-id"]
@@ -350,7 +316,6 @@ def _nonce_from_html(html):
     return ""
 
 
-# Textos de botones de UI que NO son capítulos reales
 _UI_BUTTON_TEXTS = {
     "取消回复",
     "观看最新话",
@@ -379,7 +344,6 @@ _UI_BUTTON_TEXTS = {
 
 
 def _is_ui_button(text):
-    """Devuelve True si el texto es un botón de UI, no un capítulo."""
     if not text:
         return False
     t = text.strip().lower()
@@ -391,35 +355,22 @@ def _is_ui_button(text):
 
 
 def _chapters_from_html(soup, manga_slug=""):
-    """
-    Extrae capítulos con 4 estrategias en cascada:
-    A) li.wp-manga-chapter (Madara estándar)
-    B) Cualquier <li> con <a href> apuntando al manga
-    C) JSON inline en <script> (chapterList, chapters, etc.)
-    D) Red amplia: todos los <a> que apunten a capítulos de este manga
-    """
     chapters = []
 
-    # ── ESTRATEGIA BAKAMH: Atributos custom (chapter-data-url) ───────────
     for a in soup.select("a[chapter-data-url]"):
         href = a.get("chapter-data-url", "").strip().rstrip("/")
         if not href or "/manga/" not in href:
             continue
-
         ch_slug = href.split("/")[-1]
         title = a.get_text(strip=True)
-
-        # Filtramos botones de UI por las dudas
         if _is_ui_button(title):
             continue
-
         chapters.append({"title": title, "url": href, "slug": ch_slug})
 
     if chapters:
-        chapters.reverse()  # Madara suele listarlos del más nuevo al más viejo
+        chapters.reverse()
         return chapters
 
-    # ── A: Madara estándar ────────────────────────────────────────────────────
     for li in soup.select(
         "li.wp-manga-chapter, .chapter-list li, .chapters-list li, .listing-chapters_wrap li"
     ):
@@ -435,7 +386,6 @@ def _chapters_from_html(soup, manga_slug=""):
         chapters.reverse()
         return chapters
 
-    # ── B: <li> con href a capítulo del manga ─────────────────────────────────
     if manga_slug:
         encoded = quote(manga_slug, safe="")
         for pat_slug in [manga_slug, encoded]:
@@ -449,7 +399,6 @@ def _chapters_from_html(soup, manga_slug=""):
                 ch_slug = parts[-1]
                 if ch_slug == pat_slug or ch_slug == manga_slug:
                     continue
-                # Filtrar botones de UI conocidos
                 title = a.get_text(strip=True)
                 if _is_ui_button(title):
                     continue
@@ -457,7 +406,6 @@ def _chapters_from_html(soup, manga_slug=""):
                     {"title": title or ch_slug, "url": href, "slug": ch_slug}
                 )
             if chapters:
-                # Deduplicar por slug
                 seen_s: set = set()
                 chapters = [
                     c
@@ -469,7 +417,6 @@ def _chapters_from_html(soup, manga_slug=""):
         chapters.reverse()
         return chapters
 
-    # ── C: JSON en <script> ───────────────────────────────────────────────────
     for script in soup.find_all("script"):
         txt = script.string or ""
         for var in [
@@ -514,7 +461,6 @@ def _chapters_from_html(soup, manga_slug=""):
             except Exception as e:
                 dbg(f"  JSON parse '{var}': {e}")
 
-    # ── D: red amplia — SOLO links de este manga especifico ─────────────────
     if manga_slug:
         enc = quote(manga_slug, safe="")
         seen_slugs: set = set()
@@ -541,21 +487,16 @@ def _chapters_from_html(soup, manga_slug=""):
         dbg(f"  Capítulos estrategia D: {len(chapters)}")
         chapters.reverse()
 
-    # ── Debug: si aún vacío, guardar HTML ────────────────────────────────────
     if not chapters and DEBUG:
         fname = f"debug_manga_{manga_slug[:20]}.html"
         with open(fname, "w", encoding="utf-8") as f:
             f.write(str(soup))
         print(f"  {C.YE}HTML del manga guardado: {fname}{C.EN}")
-        print(f"  {C.CY}Abrilo y buscá los links de capítulos para debuggear{C.EN}")
 
     return chapters
 
 
 def _chapters_ajax(manga_slug, manga_id, nonce):
-    """
-    Intenta todas las acciones AJAX conocidas de Madara para obtener capítulos.
-    """
     ref = f"{BASE_URL}/manga/{quote(manga_slug, safe='')}/"
 
     for action in [
@@ -590,129 +531,9 @@ def _chapters_ajax(manga_slug, manga_id, nonce):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  IMÁGENES DE CAPÍTULO
-# ══════════════════════════════════════════════════════════════════════════════
-def get_chapter_images(manga_slug, chapter_slug):
-    """
-    Extrae URLs de imagen del capítulo.
-    Métodos en orden:
-      A) div.reading-content img[data-src / src]
-      B) var imageLinks = [...] (base64 o URL directa)
-      C) AJAX manga_get_reading_style
-    """
-    encoded_manga = quote(manga_slug, safe="")
-    ch_url = f"{BASE_URL}/manga/{encoded_manga}/{chapter_slug}/"
-    dbg(f"Capítulo URL: {ch_url}")
-    time.sleep(REQUEST_DELAY)
-    r = _get(ch_url, referer=f"{BASE_URL}/manga/{encoded_manga}/")
-    if not r:
-        return []
-
-    html = r.text
-    soup = _soup(html)
-
-    # ── Método A: img en .reading-content ─────────────────────────────────────
-    urls = []
-    if soup:
-        for img in soup.select(
-            "div.reading-content img, "
-            "div.page-break img, "
-            "img.wp-manga-chapter-img, "
-            ".reading-content noscript img, "
-            "div#manga-reading-nav-head ~ div img"
-        ):
-            # Prioridad: data-lazy-src > data-src > src
-            src = (
-                img.get("data-lazy-src") or img.get("data-src") or img.get("src") or ""
-            ).strip()
-            # Aceptar también URLs relativas
-            if src and not src.startswith("data:"):
-                if src.startswith("//"):
-                    src = "https:" + src
-                elif src.startswith("/"):
-                    src = BASE_URL + src
-                if src not in urls:
-                    urls.append(src)
-
-    dbg(f"  Método A: {len(urls)} imgs")
-    if urls:
-        dbg(f"  Muestra URL[0]: {urls[0][:100]}")
-        return urls
-
-    # ── Método B: imageLinks JS variable ─────────────────────────────────────
-    m = re.search(r"var\s+imageLinks\s*=\s*(\[[^\]]+\])", html, re.DOTALL)
-    if m:
-        try:
-            raw_list = json.loads(m.group(1))
-            for item in raw_list:
-                item = item.strip()
-                # Puede ser URL directa o base64
-                if item.startswith("http"):
-                    urls.append(item)
-                else:
-                    try:
-                        import base64
-
-                        decoded = base64.b64decode(item).decode()
-                        if decoded.startswith("http"):
-                            urls.append(decoded)
-                    except Exception:
-                        pass
-            dbg(f"  Método B (imageLinks): {len(urls)} imgs")
-            if urls:
-                return urls
-        except Exception as e:
-            dbg(f"  imageLinks parse error: {e}")
-
-    # ── Método C: AJAX ────────────────────────────────────────────────────────
-    dbg("  Método C: AJAX...")
-    chapter_id = ""
-    m2 = re.search(r'"chapter_id"\s*:\s*"?(\d+)"?', html)
-    if m2:
-        chapter_id = m2.group(1)
-    if not chapter_id and soup:
-        el = soup.select_one("[data-id]")
-        if el:
-            chapter_id = el.get("data-id", "")
-
-    if chapter_id:
-        nonce = _nonce_from_html(html)
-        data = {
-            "action": "manga_get_reading_style",
-            "chapter_id": chapter_id,
-            "_wpnonce": nonce,
-        }
-        ar = _post(AJAX_URL, data=data, referer=ch_url)
-        if ar:
-            try:
-                j = ar.json()
-                frag = j.get("data", "") if isinstance(j, dict) else ar.text
-                if frag:
-                    s3 = _soup(frag)
-                    if s3:
-                        for img in s3.select("img"):
-                            src = (img.get("data-src") or img.get("src") or "").strip()
-                            if src.startswith("http"):
-                                urls.append(src)
-                        dbg(f"  Método C: {len(urls)} imgs")
-            except Exception as e:
-                dbg(f"  AJAX error: {e}")
-
-    if DEBUG:
-        fname = f"debug_ch_{chapter_slug}.html"
-        with open(fname, "w", encoding="utf-8") as f:
-            f.write(html)
-        print(f"  {C.YE}HTML capítulo guardado: {fname}{C.EN}")
-        if urls:
-            dbg(f"  Primera URL imagen: {urls[0]}")
-
-    return urls
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 #  CATÁLOGO Y GÉNEROS
 # ══════════════════════════════════════════════════════════════════════════════
-_GENRE_URL_TYPE = "manga-genre"  # detectado automáticamente por get_genres()
+_GENRE_URL_TYPE = "manga-genre"
 
 SORT_LABELS = {
     "latest": "Más recientes",
@@ -725,15 +546,61 @@ SORT_LABELS = {
 
 
 def get_genres():
-    """Extrae generos probando multiples patrones de URL de categoria."""
+    """
+    Extrae géneros probando múltiples páginas y patrones de URL.
+    Orden de búsqueda:
+      1. Elementos de navegación (nav, header, aside, menús)
+      2. Página completa
+      3. Fallback: extrae géneros desde las tarjetas del catálogo
+    """
     global _GENRE_URL_TYPE
+
     cat_pats = [
         ("/manga-genre/", "manga-genre"),
         ("/category/", "category"),
         ("/genre/", "genre"),
         ("/tag/", "tag"),
+        ("/漫画类型/", "漫画类型"),  # por si usa chino en la URL
     ]
-    for try_url in [f"{BASE_URL}/blgl/", BASE_URL + "/"]:
+
+    # Selectores de contenedores de navegación donde suelen estar los géneros
+    nav_sels = [
+        "nav",
+        "header",
+        ".nav",
+        ".menu",
+        ".genres",
+        ".genre-list",
+        "#menu",
+        ".navbar",
+        ".site-nav",
+        ".manga-nav",
+        "aside",
+        ".widget",
+        ".sidebar",
+        ".navigation",
+        "#navigation",
+        ".top-bar",
+        ".header-menu",
+        ".main-nav",
+        ".primary-menu",
+        "[class*='genre']",
+        "[class*='category']",
+        "[id*='genre']",
+        "[id*='category']",
+    ]
+
+    # Páginas a probar, en orden de probabilidad
+    pages_to_try = [
+        BASE_URL + "/",
+        f"{BASE_URL}/blgl/",
+        f"{BASE_URL}/manga/",
+        f"{BASE_URL}/genres/",
+        f"{BASE_URL}/manga-genre/",
+        f"{BASE_URL}/category/",
+    ]
+
+    for try_url in pages_to_try:
         time.sleep(REQUEST_DELAY)
         r = _get(try_url)
         if not r:
@@ -742,159 +609,209 @@ def get_genres():
         soup = _soup(html)
         if not soup:
             continue
+
         if DEBUG:
-            with open("debug_genres.html", "w", encoding="utf-8") as f:
+            fname = f"debug_genres_{try_url.split('/')[-2] or 'home'}.html"
+            with open(fname, "w", encoding="utf-8") as f:
                 f.write(html)
-            dbg("HTML de generos guardado: debug_genres.html")
+            dbg(f"HTML guardado: {fname}")
+
         for prefix, url_type in cat_pats:
             genres = []
             seen = set()
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                if prefix not in href:
+
+            # ── Paso 1: buscar en contenedores de navegación ──────────────────
+            for nav_sel in nav_sels:
+                try:
+                    nav_els = soup.select(nav_sel)
+                except Exception:
                     continue
-                # Extraer el segmento despues del prefijo
-                idx = href.index(prefix) + len(prefix)
-                rest = href[idx:].split("/")[0].split("?")[0].strip()
-                if not rest or rest in seen:
-                    continue
-                # Filtrar IDs numericos
-                if re.match(r"^\d+$", rest):
-                    continue
-                name = a.get_text(strip=True)
-                if not name or len(name) > 45:
-                    continue
-                seen.add(rest)
-                genres.append({"name": name, "slug": rest})
+                for nav_el in nav_els:
+                    for a in nav_el.find_all("a", href=True):
+                        href = a["href"]
+                        if prefix not in href:
+                            continue
+                        idx = href.index(prefix) + len(prefix)
+                        rest = href[idx:].split("/")[0].split("?")[0].strip()
+                        if not rest or rest in seen or re.match(r"^\d+$", rest):
+                            continue
+                        name = a.get_text(strip=True)
+                        if not name or len(name) > 45:
+                            continue
+                        seen.add(rest)
+                        genres.append({"name": name, "slug": rest})
+
+            # ── Paso 2: si no encontró nada en nav, buscar en toda la página ──
+            if not genres:
+                for a in soup.find_all("a", href=True):
+                    href = a["href"]
+                    if prefix not in href:
+                        continue
+                    idx = href.index(prefix) + len(prefix)
+                    rest = href[idx:].split("/")[0].split("?")[0].strip()
+                    if not rest or rest in seen or re.match(r"^\d+$", rest):
+                        continue
+                    name = a.get_text(strip=True)
+                    if not name or len(name) > 45:
+                        continue
+                    seen.add(rest)
+                    genres.append({"name": name, "slug": rest})
+
             if genres:
-                dbg(f"  {len(genres)} generos con prefijo '{prefix}'")
+                dbg(f"  {len(genres)} géneros con prefijo '{prefix}' en {try_url}")
                 _GENRE_URL_TYPE = url_type
                 return genres
+
+    # ── Fallback: extraer géneros desde las tarjetas del catálogo ─────────────
+    dbg("  Ninguna página con géneros encontrada — intentando fallback desde catálogo")
+    genres = _genres_from_catalog()
+    if genres:
+        dbg(f"  {len(genres)} géneros extraídos desde catálogo (fallback)")
+        return genres
+
+    warn("No se encontraron géneros. Usando solo 'Todos'.")
     return []
 
 
-def get_catalog(page=1, genre_slug="", sort="latest"):
+def _genres_from_catalog():
     """
-    Paginación del catálogo.
-    Prueba múltiples URL patterns porque bakamh puede usar estructura propia.
+    Fallback: carga el catálogo y extrae géneros desde los links de las tarjetas
+    de manga (que suelen tener badges/tags de género).
     """
-    candidates = []
-    if genre_slug:
-        # Usar el tipo de URL detectado por get_genres(), con fallbacks
-        candidates = [
-            f"{BASE_URL}/{_GENRE_URL_TYPE}/{genre_slug}/page/{page}/",
-            f"{BASE_URL}/manga-genre/{genre_slug}/page/{page}/",
-            f"{BASE_URL}/category/{genre_slug}/page/{page}/",
-            f"{BASE_URL}/genre/{genre_slug}/page/{page}/",
-        ]
-    else:
-        if page == 1:
-            candidates = [f"{BASE_URL}/blgl/"]
-        else:
-            candidates = [
-                f"{BASE_URL}/blgl/page/{page}/",
-                f"{BASE_URL}/manga/page/{page}/",
-            ]
-
-    # Madara usa m_orderby como query param
-    params = {"m_orderby": sort} if sort != "latest" else None
-
-    r = None
-    used_url = ""
-    for url in candidates:
-        time.sleep(REQUEST_DELAY)
-        r = _get(url, params=params, referer=f"{BASE_URL}/")
-        if r:
-            used_url = url
-            break
-
-    if not r:
-        return [], 1
-
-    soup = _soup(r.text)
-    if not soup:
-        return [], 1
-
-    items = _parse_manga_cards(soup)
-
-    # Debug: guardar si sin resultados
-    if not items and DEBUG:
-        fname = f"debug_catalog_p{page}.html"
-        with open(fname, "w", encoding="utf-8") as f:
-            f.write(r.text)
-        dbg(f"  Sin resultados en {used_url} — HTML guardado: {fname}")
-
-    # Total de páginas — buscar el número más alto en los links de paginación
-    total = _detect_total_pages(soup, r.text)
-    dbg(f"  Catálogo {used_url} pág {page}/{total}: {len(items)} series")
-    return items, total
-
-
-def _detect_total_pages(soup, html):
-    """
-    Detecta el total de páginas del paginador.
-    Solo busca en los links de paginación, NO en URLs de capítulos.
-    """
-    # Selectores específicos de paginación
-    for sel in [".nav-links", ".pagination", ".wp-pagenavi", ".page-numbers"]:
-        container = soup.select_one(sel)
-        if not container:
-            continue
-        # Solo /blgl/page/N/ o /page/N/ al final — no /manga/SLUG/c-N/
-        nums = []
-        for a in container.find_all("a"):
-            href = a.get("href", "")
-            # Excluir URLs de capítulos (contienen /manga/)
-            if "/manga/" in href:
-                continue
-            m = re.search(r"/page/(\d+)/?$", href.rstrip("/"))
-            if m:
-                nums.append(int(m.group(1)))
-        if nums:
-            return max(nums)
-    # Fallback estricto: solo URLs de paginación del catálogo
-    nums = re.findall(r"/blgl/page/(\d+)/?", html)
-    return max(int(n) for n in nums) if nums else 1
-
-
-def search(query, page=1):
-    """/?s=QUERY&post_type=wp-manga"""
-    url = f"{BASE_URL}/page/{page}/" if page > 1 else f"{BASE_URL}/"
-    params = {"s": query, "post_type": "wp-manga"}
+    cat_pats = [
+        ("/manga-genre/", "manga-genre"),
+        ("/category/", "category"),
+        ("/genre/", "genre"),
+        ("/tag/", "tag"),
+    ]
     time.sleep(REQUEST_DELAY)
-    r = _get(url, params=params, referer=BASE_URL + "/")
+    r = _get(f"{BASE_URL}/blgl/", referer=BASE_URL + "/")
     if not r:
-        return [], 1
+        r = _get(BASE_URL + "/", referer=BASE_URL + "/")
+    if not r:
+        return []
 
     soup = _soup(r.text)
     if not soup:
-        return [], 1
+        return []
 
-    items = _parse_manga_cards(soup)
+    for prefix, url_type in cat_pats:
+        genres = []
+        seen = set()
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if prefix not in href:
+                continue
+            # Excluir paginación y URLs de capítulos
+            if re.search(r"/page/\d+", href) or "/manga/" in href:
+                continue
+            idx = href.index(prefix) + len(prefix)
+            rest = href[idx:].split("/")[0].split("?")[0].strip()
+            if not rest or rest in seen or re.match(r"^\d+$", rest):
+                continue
+            name = a.get_text(strip=True)
+            if not name or len(name) > 45:
+                continue
+            seen.add(rest)
+            genres.append({"name": name, "slug": rest})
+        if genres:
+            global _GENRE_URL_TYPE
+            _GENRE_URL_TYPE = url_type
+            return genres
 
-    total = 1
-    for sel in [".nav-links .last", ".nav-links a:last-child"]:
-        el = soup.select_one(sel)
+    return []
+
+
+def _extract_card(card, items, seen):
+    a = card.select_one("a[href*='/manga/']")
+    if not a:
+        return
+    href = a["href"].rstrip("/")
+    m = re.search(r"/manga/([^/?#]+)", href)
+    if not m:
+        return
+    slug = unquote(m.group(1))
+    if slug in seen:
+        return
+    seen.add(slug)
+
+    # Intentar obtener el título con múltiples estrategias en orden de fiabilidad
+    title = ""
+
+    # 1. Selectores de título específicos del tema
+    for sel in [
+        ".manga-name a",
+        ".manga-name",
+        ".post-title a",
+        ".post-title",
+        "h3 a",
+        "h4 a",
+        "h3",
+        "h4",
+        "h2 a",
+        "h2",
+        ".tab-meta-title a",
+        ".tab-meta-title",
+        ".item-summary .post-title",
+        ".item-summary h3",
+        "[class*='title'] a",
+        "[class*='title']",
+        "[class*='name'] a",
+        "[class*='name']",
+    ]:
+        el = card.select_one(sel)
         if el:
-            m = re.search(r"/page/(\d+)/?", el.get("href", ""))
-            if m:
-                total = int(m.group(1))
+            t = el.get_text(strip=True)
+            if t and len(t) >= 2:
+                title = t
                 break
 
-    dbg(f"  Búsqueda '{query}' pág {page}/{total}: {len(items)}")
-    return items, total
+    # 2. Atributo title o aria-label de cualquier enlace al manga
+    if not title:
+        for lnk in card.find_all("a", href=True):
+            if "/manga/" in lnk.get("href", ""):
+                for attr in ("title", "aria-label"):
+                    t = lnk.get(attr, "").strip()
+                    if t and len(t) >= 2:
+                        title = t
+                        break
+            if title:
+                break
+
+    # 3. Alt de la imagen de portada
+    if not title:
+        img = card.select_one("img")
+        if img:
+            t = (img.get("alt") or img.get("title") or "").strip()
+            if t and len(t) >= 2:
+                title = t
+
+    # 4. Cualquier texto directo del card que no sea vacío
+    if not title:
+        t = card.get_text(" ", strip=True)
+        # Tomar solo la primera línea significativa
+        for line in t.splitlines():
+            line = line.strip()
+            if line and len(line) >= 2 and line != slug:
+                title = line
+                break
+
+    # 5. Último recurso: slug decodificado legible
+    if not title:
+        title = slug.replace("-", " ").replace("_", " ").strip()
+
+    latest_el = card.select_one(
+        ".chapter a, .font-meta a, .chapter-item a, .latest-chap a, "
+        "[class*='chapter'] a, [class*='latest'] a"
+    )
+    latest = latest_el.get_text(strip=True) if latest_el else ""
+    items.append({"slug": slug, "title": title, "latest": latest})
 
 
 def _parse_manga_cards(soup):
-    """
-    Parsea tarjetas de manga de cualquier listado.
-    Estrategia: recolectar TODOS los <a href*='/manga/'> únicos de la página,
-    filtrando los que son claramente navegación (paginación, menú, etc.).
-    """
     items = []
     seen = set()
 
-    # ── Estrategia A: selectores de contenedores Madara conocidos ─────────────
     container_sels = [
         ".page-item-detail",
         ".manga-item",
@@ -904,7 +821,7 @@ def _parse_manga_cards(soup):
         ".manga-content .manga",
         "li.manga-item",
         ".post-content-item",
-        ".col-6.col-sm-3",  # layout de grid genérico
+        ".col-6.col-sm-3",
     ]
     for sel in container_sels:
         cards = soup.select(sel)
@@ -916,17 +833,14 @@ def _parse_manga_cards(soup):
             dbg(f"  Cards con selector '{sel}': {len(items)}")
             return items
 
-    # ── Estrategia B: red amplia — todos los <a> con /manga/ en el main/article ─
     for container_sel in ["main", "article", ".site-content", "#content", "body"]:
         container = soup.select_one(container_sel)
         if not container:
             continue
         for a in container.find_all("a", href=re.compile(r"/manga/[^/\s]")):
             href = a.get("href", "").rstrip("/")
-            # Filtrar URLs de capítulos (tienen más segmentos)
             if re.search(r"/manga/[^/]+/[^/]+$", href):
                 continue
-            # Filtrar si el anchor es solo imagen sin texto (iconos de nav)
             text = a.get_text(strip=True)
             if not text or len(text) < 2:
                 continue
@@ -946,28 +860,353 @@ def _parse_manga_cards(soup):
     return items
 
 
-def _extract_card(card, items, seen):
-    a = card.select_one("a[href*='/manga/']")
-    if not a:
-        return
-    href = a["href"].rstrip("/")
-    m = re.search(r"/manga/([^/?#]+)", href)
-    if not m:
-        return
-    slug = unquote(m.group(1))
-    if slug in seen:
-        return
-    seen.add(slug)
-    title_el = (
-        card.select_one(".manga-name a, .post-title a, h3 a, h4 a, .tab-meta-title a")
-        or a
+def get_catalog(page=1, genre_slug="", sort="latest"):
+    candidates = []
+    if genre_slug:
+        candidates = [
+            f"{BASE_URL}/{_GENRE_URL_TYPE}/{genre_slug}/page/{page}/",
+            f"{BASE_URL}/manga-genre/{genre_slug}/page/{page}/",
+            f"{BASE_URL}/category/{genre_slug}/page/{page}/",
+            f"{BASE_URL}/genre/{genre_slug}/page/{page}/",
+        ]
+    else:
+        if page == 1:
+            candidates = [f"{BASE_URL}/blgl/", f"{BASE_URL}/manga/"]
+        else:
+            candidates = [
+                f"{BASE_URL}/blgl/page/{page}/",
+                f"{BASE_URL}/manga/page/{page}/",
+            ]
+
+    params = {"m_orderby": sort} if sort != "latest" else None
+
+    r = None
+    used_url = ""
+    for url in candidates:
+        time.sleep(0.2)  # delay reducido para carga en paralelo
+        r = _get(url, params=params, referer=f"{BASE_URL}/")
+        if r:
+            used_url = url
+            break
+
+    if not r:
+        return [], 1
+
+    soup = _soup(r.text)
+    if not soup:
+        return [], 1
+
+    items = _parse_manga_cards(soup)
+
+    if not items and DEBUG:
+        fname = f"debug_catalog_p{page}.html"
+        with open(fname, "w", encoding="utf-8") as f:
+            f.write(r.text)
+        dbg(f"  Sin resultados en {used_url} — HTML guardado: {fname}")
+
+    total = _detect_total_pages(soup, r.text, genre_slug)
+    dbg(f"  Catálogo {used_url} pág {page}/{total}: {len(items)} series")
+    return items, total
+
+
+def _detect_total_pages(soup, html, genre_slug=""):
+    """
+    Detecta el total de páginas de forma robusta para cualquier URL de catálogo.
+    Estrategias en orden de confianza:
+      1. Mayor número en links de paginación (excluyendo capítulos).
+      2. Texto 'Page X of Y' dentro del paginador.
+      3. Búsqueda bruta de /page/N/ en el HTML según el tipo de URL.
+    """
+    for sel in [
+        ".nav-links",
+        ".pagination",
+        ".wp-pagenavi",
+        ".page-numbers",
+        ".paginate",
+        "[class*='pagin']",
+    ]:
+        container = soup.select_one(sel)
+        if not container:
+            continue
+        nums = []
+        for a in container.find_all("a", href=True):
+            href = a["href"]
+            if re.search(r"/manga/[^/]+/[^/]+", href):
+                continue
+            m = re.search(r"/page/(\d+)/?", href)
+            if m:
+                nums.append(int(m.group(1)))
+        if nums:
+            return max(nums)
+
+    patterns = [
+        rf"/{re.escape(genre_slug)}/page/(\d+)/" if genre_slug else None,
+        r"/blgl/page/(\d+)/",
+        r"/manga-genre/[^/]+/page/(\d+)/",
+        r"/category/[^/]+/page/(\d+)/",
+        r"/genre/[^/]+/page/(\d+)/",
+        r"[?&]paged=(\d+)",
+    ]
+    all_nums = []
+    for pat in patterns:
+        if not pat:
+            continue
+        for m in re.finditer(pat, html):
+            n = int(m.group(1))
+            if n < 10000:
+                all_nums.append(n)
+    if all_nums:
+        return max(all_nums)
+
+    return 1
+
+
+def _fetch_search_page(args):
+    """Worker: descarga una pagina de resultados de busqueda."""
+    pg, query = args
+    url = BASE_URL + "/" if pg == 1 else f"{BASE_URL}/page/{pg}/"
+    params = {"s": query, "post_type": "wp-manga"}
+    time.sleep(0.1)
+    r = _get(url, params=params, referer=BASE_URL + "/")
+    if not r:
+        return pg, None
+    soup = _soup(r.text)
+    if not soup:
+        return pg, None
+    # Detectar pagina real de no-results
+    if soup.select_one(".no-posts-found, .no-results, .not-found"):
+        return pg, []
+    items = _parse_manga_cards(soup)
+    return pg, items
+
+
+def search(query, page=1):
+    """
+    Busqueda paralela: lanza SEARCH_WORKERS requests simultaneas,
+    avanza en lotes hasta recibir pagina vacia.
+    """
+    if not hasattr(search, "_cache"):
+        search._cache = {}
+
+    key = query.lower().strip()
+
+    if key not in search._cache:
+        WORKERS = 8
+        all_items = []
+        seen = set()
+        pg = 1
+
+        sys.stdout.write(f"  {C.BL}Buscando '{query}'...{C.EN}   \r")
+        sys.stdout.flush()
+
+        while pg <= 500:
+            # Lanzar un lote de WORKERS paginas en paralelo
+            batch = list(range(pg, pg + WORKERS))
+            pg += WORKERS
+
+            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                futures = {
+                    pool.submit(_fetch_search_page, (p, query)): p for p in batch
+                }
+                batch_results = {}
+                for fut in as_completed(futures):
+                    p, items = fut.result()
+                    batch_results[p] = items
+
+            # Procesar en orden para mantener coherencia
+            found_any = False
+            hit_end = False
+            for p in sorted(batch_results):
+                items = batch_results[p]
+                if items is None or items == []:
+                    hit_end = True
+                    break
+                for it in items:
+                    if it["slug"] not in seen:
+                        seen.add(it["slug"])
+                        all_items.append(it)
+                found_any = True
+
+            sys.stdout.write(
+                f"  {C.BL}Buscando '{query}'... {len(all_items)} resultados{C.EN}   \r"
+            )
+            sys.stdout.flush()
+
+            if hit_end or not found_any:
+                break
+
+        sys.stdout.write(" " * 70 + "\r")
+        sys.stdout.flush()
+
+        PAGE_SIZE = 20
+        pages = [
+            all_items[k : k + PAGE_SIZE]
+            for k in range(0, max(len(all_items), 1), PAGE_SIZE)
+        ]
+        if not pages:
+            pages = [[]]
+        search._cache[key] = pages
+        dbg(f"  '{query}': {len(all_items)} totales, {len(pages)} paginas UI")
+
+    pages = search._cache[key]
+    total = len(pages)
+    idx = max(0, min(page - 1, total - 1))
+    return pages[idx], total
+
+
+def _fetch_catalog_page(args):
+    """Worker: descarga una página del catálogo."""
+    page, genre_slug, sort = args
+    items, detected_total = get_catalog(page, genre_slug, sort)
+    return page, items, detected_total
+
+
+def _load_all_pages(genre_slug, sort, label, workers=8, hint_count=0):
+    """
+    Carga TODAS las páginas de un género en paralelo.
+
+    Estrategia para determinar cuántas páginas hay (en orden de confianza):
+      1. Si hint_count > 0 (del nombre del género, ej. "BL(968)"):
+             total_pages = ceil(hint_count / items_per_page)
+      2. _detect_total_pages() del HTML de la página 1.
+      3. Seguir cargando en lotes hasta recibir página vacía (stop automático).
+
+    Devuelve (all_items, seen_slugs).
+    """
+    import math
+
+    all_items = []
+    seen_slugs = set()
+
+    # ── Página 1 síncrona: necesaria para calibrar items_per_page y total ──
+    items1, detected_total = get_catalog(1, genre_slug, sort)
+    items_per_page = max(len(items1), 1)
+
+    for it in items1:
+        if it["slug"] not in seen_slugs:
+            seen_slugs.add(it["slug"])
+            all_items.append(it)
+
+    # Determinar total de páginas
+    if hint_count > 0 and items_per_page > 0:
+        computed_total = math.ceil(hint_count / items_per_page)
+        total = max(detected_total, computed_total)
+    else:
+        total = detected_total if detected_total > 1 else 9999  # exploración abierta
+
+    sys.stdout.write(
+        f"  {C.BL}{label} — pág 1/{total if total < 9999 else '?'} "
+        f"— {len(all_items)} series{C.EN}   \r"
     )
-    title = title_el.get_text(strip=True)
-    latest_el = card.select_one(
-        ".chapter a, .font-meta a, .chapter-item a, .latest-chap a"
-    )
-    latest = latest_el.get_text(strip=True) if latest_el else ""
-    items.append({"slug": slug, "title": title, "latest": latest})
+    sys.stdout.flush()
+
+    if items_per_page == 0 or not items1:
+        return all_items, seen_slugs
+
+    # ── Páginas 2..total en paralelo (lotes de `workers`) ──────────────────
+    page = 2
+    consecutive_empty = 0
+
+    while page <= total:
+        batch = list(range(page, min(page + workers, total + 1)))
+        page += len(batch)
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_fetch_catalog_page, (p, genre_slug, sort)): p
+                for p in batch
+            }
+            batch_results = {}
+            for fut in as_completed(futures):
+                p, page_items, _ = fut.result()
+                batch_results[p] = page_items
+
+        # Insertar en orden de página
+        got_any = False
+        for p in sorted(batch_results):
+            items = batch_results[p]
+            if not items:
+                consecutive_empty += 1
+            else:
+                consecutive_empty = 0
+                got_any = True
+                for it in items:
+                    if it["slug"] not in seen_slugs:
+                        seen_slugs.add(it["slug"])
+                        all_items.append(it)
+
+        sys.stdout.write(
+            f"  {C.BL}{label} — págs {batch[0]}-{batch[-1]}"
+            f"/{total if total < 9999 else '?'} "
+            f"— {len(all_items)} series{C.EN}   \r"
+        )
+        sys.stdout.flush()
+
+        # Si 3 lotes consecutivos vacíos, asumimos fin del catálogo
+        if consecutive_empty >= workers * 2:
+            dbg(f"  {label}: {consecutive_empty} págs vacías consecutivas — fin")
+            break
+
+    return all_items, seen_slugs
+
+
+def get_all_catalog(genre_slug="", sort="latest", genres=None):
+    """
+    Carga ABSOLUTAMENTE TODAS las series del sitio.
+
+    • Si genre_slug está definido: todas las páginas de ese género.
+    • Si genre_slug == "" (Todos): itera cada género individualmente y concatena,
+      pasando el conteo del género (extraído del nombre) para calcular las páginas
+      correctas sin depender de la paginación del HTML.
+    """
+    import re as _re
+
+    all_items = []
+    seen_slugs = set()
+
+    def _extract_count(name):
+        """Extrae el número entre paréntesis al final del nombre, ej 'BL(968)' → 968."""
+        m = _re.search(r"\((\d+)\)\s*$", name)
+        return int(m.group(1)) if m else 0
+
+    if genre_slug:
+        hint = 0
+        if genres:
+            for g in genres:
+                if g["slug"] == genre_slug:
+                    hint = _extract_count(g["name"])
+                    break
+        items, _ = _load_all_pages(genre_slug, sort, genre_slug, hint_count=hint)
+        print()
+        return items
+
+    # ── Modo "Todos": iterar género por género ────────────────────────────────
+    # /blgl/ primero (series sin género específico / featured)
+    blgl_items, blgl_seen = _load_all_pages("", sort, "/blgl/", hint_count=0)
+    for it in blgl_items:
+        if it["slug"] not in seen_slugs:
+            seen_slugs.add(it["slug"])
+            all_items.append(it)
+
+    if not genres:
+        print()
+        return all_items
+
+    total_genres = len(genres)
+    for gi, g in enumerate(genres, 1):
+        hint = _extract_count(g["name"])
+        label = f"[{gi}/{total_genres}] {g['name']}"
+        g_items, _ = _load_all_pages(g["slug"], sort, label, hint_count=hint)
+        added = 0
+        for it in g_items:
+            if it["slug"] not in seen_slugs:
+                seen_slugs.add(it["slug"])
+                all_items.append(it)
+                added += 1
+        dbg(f"  Género '{g['name']}': {len(g_items)} cargadas, {added} nuevas")
+
+    print()
+    return all_items
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -986,7 +1225,6 @@ def _ext(url):
 
 def _dl_image(args):
     idx, url, dest, referer = args
-    # Normalizar URL
     if url.startswith("//"):
         url = "https:" + url
     elif url.startswith("/"):
@@ -1005,7 +1243,6 @@ def _dl_image(args):
             r = _sess.get(url, headers=headers, timeout=30)
             dbg(f"  img[{idx}] {r.status_code}  {url[:70]}")
             if r.status_code == 403:
-                # Intentar sin Referer (algunos CDN bloquean referers externos)
                 r = _sess.get(url, headers={"Accept": headers["Accept"]}, timeout=30)
                 dbg(f"  img[{idx}] retry sin Referer: {r.status_code}")
             if r.status_code != 200:
@@ -1013,7 +1250,7 @@ def _dl_image(args):
                 continue
             raw = r.content
             if not raw or len(raw) < 500:
-                dbg(f"  img[{idx}] respuesta vacía o muy pequeña ({len(raw)} bytes)")
+                dbg(f"  img[{idx}] respuesta vacía ({len(raw)} bytes)")
                 time.sleep(1)
                 continue
             if USER_FORMAT != "original" and _HAS_PIL:
@@ -1117,6 +1354,110 @@ def download_chapter(manga_slug, manga_title, chapter, ch_num, total):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  IMÁGENES DE CAPÍTULO
+# ══════════════════════════════════════════════════════════════════════════════
+def get_chapter_images(manga_slug, chapter_slug):
+    encoded_manga = quote(manga_slug, safe="")
+    ch_url = f"{BASE_URL}/manga/{encoded_manga}/{chapter_slug}/"
+    dbg(f"Capítulo URL: {ch_url}")
+    time.sleep(REQUEST_DELAY)
+    r = _get(ch_url, referer=f"{BASE_URL}/manga/{encoded_manga}/")
+    if not r:
+        return []
+
+    html = r.text
+    soup = _soup(html)
+
+    urls = []
+    if soup:
+        for img in soup.select(
+            "div.reading-content img, "
+            "div.page-break img, "
+            "img.wp-manga-chapter-img, "
+            ".reading-content noscript img, "
+            "div#manga-reading-nav-head ~ div img"
+        ):
+            src = (
+                img.get("data-lazy-src") or img.get("data-src") or img.get("src") or ""
+            ).strip()
+            if src and not src.startswith("data:"):
+                if src.startswith("//"):
+                    src = "https:" + src
+                elif src.startswith("/"):
+                    src = BASE_URL + src
+                if src not in urls:
+                    urls.append(src)
+
+    dbg(f"  Método A: {len(urls)} imgs")
+    if urls:
+        return urls
+
+    m = re.search(r"var\s+imageLinks\s*=\s*(\[[^\]]+\])", html, re.DOTALL)
+    if m:
+        try:
+            raw_list = json.loads(m.group(1))
+            for item in raw_list:
+                item = item.strip()
+                if item.startswith("http"):
+                    urls.append(item)
+                else:
+                    try:
+                        import base64
+
+                        decoded = base64.b64decode(item).decode()
+                        if decoded.startswith("http"):
+                            urls.append(decoded)
+                    except Exception:
+                        pass
+            dbg(f"  Método B (imageLinks): {len(urls)} imgs")
+            if urls:
+                return urls
+        except Exception as e:
+            dbg(f"  imageLinks parse error: {e}")
+
+    dbg("  Método C: AJAX...")
+    chapter_id = ""
+    m2 = re.search(r'"chapter_id"\s*:\s*"?(\d+)"?', html)
+    if m2:
+        chapter_id = m2.group(1)
+    if not chapter_id and soup:
+        el = soup.select_one("[data-id]")
+        if el:
+            chapter_id = el.get("data-id", "")
+
+    if chapter_id:
+        nonce = _nonce_from_html(html)
+        data = {
+            "action": "manga_get_reading_style",
+            "chapter_id": chapter_id,
+            "_wpnonce": nonce,
+        }
+        ar = _post(AJAX_URL, data=data, referer=ch_url)
+        if ar:
+            try:
+                j = ar.json()
+                frag = j.get("data", "") if isinstance(j, dict) else ar.text
+                if frag:
+                    s3 = _soup(frag)
+                    if s3:
+                        for img in s3.select("img"):
+                            src = (img.get("data-src") or img.get("src") or "").strip()
+                            if src.startswith("http"):
+                                urls.append(src)
+                        dbg(f"  Método C: {len(urls)} imgs")
+            except Exception as e:
+                dbg(f"  AJAX error: {e}")
+
+    if DEBUG:
+        fname = f"debug_ch_{chapter_slug}.html"
+        with open(fname, "w", encoding="utf-8") as f:
+            f.write(html)
+        print(f"  {C.YE}HTML capítulo guardado: {fname}{C.EN}")
+
+    return urls
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  HELPERS UI
 # ══════════════════════════════════════════════════════════════════════════════
 def print_list(items):
@@ -1211,24 +1552,35 @@ def menu_download():
     if not val:
         return
 
-    slug = parse_input(val)
-
-    # Si parece slug/URL directo (sin espacios) → ir directo
-    if " " not in slug:
+    # Solo ir directo si es una URL real con /manga/ en la ruta
+    is_url = (
+        "bakamh.com/manga/" in val
+        or val.startswith("http")
+        or (val.startswith("/") and "/manga/" in val)
+    )
+    if is_url:
+        slug = parse_input(val)
         show_and_download(slug)
         return
 
-    # Búsqueda por texto
-    page, total = 1, 1
-    results = []
+    # Todo lo demás (nombre, palabra suelta, frase) → buscar siempre
+    # search() carga TODO via AJAX en el primer llamado y cachea internamente
+    banner("🔍  Buscar")
+    print(f"  {C.YE}Buscando: {val}{C.EN}\n")
+    results, total = search(val, 1)  # primer llamado carga todo
+
+    if not results:
+        banner("🔍  Resultados")
+        print(f"  {C.RE}Sin resultados para: {val}{C.EN}")
+        time.sleep(1.5)
+        return
+
+    page = 1
     while True:
-        if not results:
-            banner("🔍  Buscar")
-            print(f"  {C.YE}Buscando: {val}{C.EN}  pág {C.BO}{page}{C.EN}/{total}\n")
-            results, total = search(val, page)
+        results, total = search(val, page)
 
         banner("🔍  Resultados")
-        print(f"  {C.YE}{val}{C.EN}  {C.BL}│{C.EN}  pág {C.BO}{page}{C.EN}/{total}\n")
+        print(f"  {C.YE}{val}{C.EN}  {C.BL}│{C.EN}  pág {C.BO}{page}/{total}{C.EN}\n")
 
         if not results:
             print(f"  {C.RE}Sin resultados.{C.EN}")
@@ -1246,10 +1598,8 @@ def menu_download():
             return
         elif cmd == "n" and page < total:
             page += 1
-            results = []
         elif cmd == "p" and page > 1:
             page -= 1
-            results = []
         elif cmd.isdigit():
             idx = int(cmd) - 1
             if 0 <= idx < len(results):
@@ -1279,45 +1629,68 @@ def menu_catalog():
             if 0 <= idx < len(genres):
                 genre_slug = genres[idx]["slug"]
                 genre_name = genres[idx]["name"]
+    else:
+        print(f"  {C.YE}No se encontraron géneros, mostrando todos.{C.EN}")
+        time.sleep(1)
 
-    page = 1
-    total = 999
     sort = "latest"
-    cache = {}
+    all_items = []
+    filtered = []
+    filter_text = ""
+
+    def reload():
+        nonlocal all_items, filtered, filter_text
+        banner(f"📂  {genre_name}")
+        if genre_slug == "" and genres:
+            print(
+                f"  {C.YE}Cargando TODAS las series ({SORT_LABELS[sort]}){C.EN}\n"
+                f"  {C.CY}Recorriendo {len(genres)} géneros — puede tardar varios minutos...{C.EN}\n"
+            )
+        else:
+            print(f"  {C.YE}Cargando todas las series ({SORT_LABELS[sort]})...{C.EN}\n")
+        all_items = get_all_catalog(
+            genre_slug, sort, genres if genre_slug == "" else None
+        )
+        filter_text = ""
+        filtered = all_items[:]
+
+    reload()
 
     while True:
-        if page not in cache:
-            banner(f"📂  {genre_name}")
-            print(f"  {C.YE}Cargando...{C.EN}")
-            items, total = get_catalog(page, genre_slug, sort)
-            cache[page] = items
-        else:
-            items = cache[page]
-
         banner(f"📂  {genre_name}")
-        print(
+        header = (
             f"  {C.PU}{genre_name}{C.EN}  {C.BL}│{C.EN}  {C.CY}{SORT_LABELS[sort]}{C.EN}"
-            f"  {C.BL}│{C.EN}  pág {C.BO}{page}{C.EN}/{total}\n"
+            f"  {C.BL}│{C.EN}  {C.BO}{len(filtered)}{C.EN} series"
         )
+        if filter_text:
+            header += f"  {C.BL}│{C.EN}  filtro: {C.YE}{filter_text}{C.EN}"
+        print(header + "\n")
 
-        if not items:
+        if not filtered:
             print(f"  {C.RE}Sin resultados.{C.EN}")
         else:
-            print_list(items)
+            print_list(filtered)
 
         print(
-            f"\n  {C.BL}[n]{C.EN}sig  {C.BL}[p]{C.EN}ant  {C.BL}[s]{C.EN}orden  "
+            f"\n  {C.BL}[f]{C.EN}filtrar  {C.BL}[s]{C.EN}orden  "
             f"{C.BL}[q]{C.EN}volver  {C.BL}[número]{C.EN} descargar"
         )
-        cmd = input(f"\n  {C.YE}➜ {C.EN}").strip().lower()
+        cmd = input(f"\n  {C.YE}➜ {C.EN}").strip()
 
-        if cmd == "q":
+        if cmd.lower() == "q":
             return
-        elif cmd == "n" and page < total:
-            page += 1
-        elif cmd == "p" and page > 1:
-            page -= 1
-        elif cmd == "s":
+
+        elif cmd.lower() == "f":
+            ft = input(
+                f"  {C.YE}Filtrar por nombre (vacío = mostrar todos) ➜ {C.EN}"
+            ).strip()
+            filter_text = ft
+            if ft:
+                filtered = [it for it in all_items if ft.lower() in it["title"].lower()]
+            else:
+                filtered = all_items[:]
+
+        elif cmd.lower() == "s":
             banner("📂  Ordenar")
             for i, (k, v) in enumerate(SORT_LABELS.items()):
                 print(f"  {C.BO}{i + 1}.{C.EN}  {v}")
@@ -1327,12 +1700,12 @@ def menu_catalog():
                 keys = list(SORT_LABELS.keys())
                 if 0 <= idx < len(keys) and keys[idx] != sort:
                     sort = keys[idx]
-                    cache.clear()
-                    page = 1
+                    reload()
+
         elif cmd.isdigit():
             idx = int(cmd) - 1
-            if items and 0 <= idx < len(items):
-                show_and_download(items[idx]["slug"])
+            if filtered and 0 <= idx < len(filtered):
+                show_and_download(filtered[idx]["slug"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1353,7 +1726,6 @@ def check_deps():
 def main():
     check_deps()
 
-    # Arg directo: --url URL o URL sola
     url_arg = ""
     for i, a in enumerate(sys.argv[1:], 1):
         if a == "--url" and i < len(sys.argv) - 1:

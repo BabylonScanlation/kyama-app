@@ -26,7 +26,6 @@ from typing import Any
 import requests
 from bs4 import BeautifulSoup
 
-# ── Soporte Pillow ─────────────────────────────────────────────────────────────
 try:
     from PIL import Image
 
@@ -37,7 +36,7 @@ except ImportError:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  CONFIGURACIÓN  (edita aquí)
+#  CONFIGURACIÓN
 # ══════════════════════════════════════════════════════════════════════════════
 BASE_URL = "https://wfwf448.com/"
 OUTPUT_TYPE = "zip"  # 'zip' | 'cbz' | 'pdf'
@@ -46,7 +45,7 @@ DELETE_TEMP = True
 MAX_WORKERS_DL = 16
 MAX_RESULTS_PAGE = 20
 REQUEST_TIMEOUT = (12, 20)
-RETRY_DELAY = 1.5  # segundos entre reintentos
+RETRY_DELAY = 1.5
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -65,7 +64,6 @@ class C:
 
 
 def header() -> None:
-    # _ = os.system("cls" if os.name == "nt" else "clear")
     print(f"{C.BLUE}╔══════════════════════════════════════════╗")
     print(f"║  {C.BOLD}WFWF DOWNLOADER v2.0{C.END}{C.BLUE}                    ║")
     print(f"║  {C.DIM}wfwf448.com  ·  Webtoon + Manhwa{C.END}{C.BLUE}         ║")
@@ -98,7 +96,7 @@ def make_session() -> requests.Session:
     s = requests.Session()
     s.headers.update(HEADERS)
     try:
-        s.get(BASE_URL, timeout=10)  # obtener cookies iniciales
+        s.get(BASE_URL, timeout=10)
     except Exception:
         pass
     return s
@@ -109,11 +107,9 @@ METADATA_CACHE: dict[str, Any] = {}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MODOS: Webtoon vs Manhwa
+#  MODOS
 # ══════════════════════════════════════════════════════════════════════════════
 class Mode:
-    """Encapsula las rutas URL según el tipo de contenido."""
-
     WEBTOON = "webtoon"
     MANHWA = "manhwa"
 
@@ -121,30 +117,23 @@ class Mode:
         assert kind in (self.WEBTOON, self.MANHWA)
         self.kind = kind
 
-    # ── páginas principales ────────────────────────────────────────────────
     @property
     def main_path(self) -> str:
         return "ing" if self.kind == self.WEBTOON else "cm"
 
-    # ── URL ficha de serie ─────────────────────────────────────────────────
     def series_url(self, toon_id: str, enc_title: str) -> str:
         path = "list" if self.kind == self.WEBTOON else "cl"
         safe = urllib.parse.quote(enc_title, safe="%+")
         return f"{BASE_URL}{path}?toon={toon_id}&title={safe}"
 
-    # ── URL de un capítulo ─────────────────────────────────────────────────
     def chapter_url(self, toon_id: str, num: int, enc_title: str) -> str:
         path = "view" if self.kind == self.WEBTOON else "cv"
         safe = urllib.parse.quote(enc_title, safe="%+")
         return f"{BASE_URL}{path}?toon={toon_id}&num={num}&title={safe}{num}%C8%AD"
 
-    # ── Patrón para capítulos en el HTML de la ficha ───────────────────────
     def chapter_href_re(self, toon_id: str) -> re.Pattern[str]:
         path = "view" if self.kind == self.WEBTOON else "cv"
-        return re.compile(
-            rf"{path}\?toon={toon_id}&num=(\d+)&title=",
-            re.IGNORECASE,
-        )
+        return re.compile(rf"{path}\?toon={toon_id}&num=(\d+)&title=", re.IGNORECASE)
 
     def __str__(self) -> str:
         return "Webtoon" if self.kind == self.WEBTOON else "Manhwa"
@@ -155,7 +144,6 @@ class Mode:
 # ══════════════════════════════════════════════════════════════════════════════
 _UI_PATHS = ("/images/", "/bann/", "/img/", "/icons/", "/logo", "/thumb")
 
-# CDNs conocidos para imágenes
 CDN_RE = re.compile(
     r"https?://[a-z0-9\-]+\.(?:site|com|net|kr)/[^\s\"'<>]+"
     r"\.(?:jpe?g|png|webp|gif)",
@@ -164,7 +152,7 @@ CDN_RE = re.compile(
 
 
 def _soup(html: str) -> BeautifulSoup:
-    return BeautifulSoup(html, "lxml")
+    return BeautifulSoup(html, "html.parser")
 
 
 def fetch_html(url: str, retries: int = 3) -> str | None:
@@ -180,9 +168,8 @@ def fetch_html(url: str, retries: int = 3) -> str | None:
     return None
 
 
-# ── Categorías completas por modo ──────────────────────────────────────────
+# ── Categorías completas ───────────────────────────────────────────────────
 _WEBTOON_CATS = [
-    # días (type2=1..7) + recientes + nuevas + cada 10 días
     *[f"?o=n&type1=day&type2={i}" for i in range(1, 8)],
     "?o=n&type1=day&type2=10",
     "?o=n&type1=day&type2=recent",
@@ -190,99 +177,163 @@ _WEBTOON_CATS = [
 ]
 
 _MANHWA_CATS = [
-    # periodicidad
     *[f"?o=n&type1=complete&type2={i}" for i in [10, 11, 12, 13, 14, 15, 16, 20]],
     "?o=n&type1=complete&type2=recent",
 ]
 
 
-def fetch_series_list(mode: Mode) -> list[dict[str, str]]:
-    """Raspa el catálogo completo combinando todas las categorías del sitio."""
+def _parse_series_from_html(html: str, mode: Mode) -> list[dict[str, str]]:
+    """Extrae pares (toon_id, enc_title, title) de un HTML de catálogo."""
     path_kw = "list" if mode.kind == Mode.WEBTOON else "cl"
     pat = re.compile(rf"/{path_kw}\?toon=(\d+)&title=([^&\s\"']+)")
+    soup = _soup(html)
+    items: list[dict[str, str]] = []
+    seen: set[str] = set()
 
+    for a in soup.find_all("a", href=True):
+        m = pat.search(a["href"])
+        if not m:
+            continue
+        toon_id, enc_title = m.group(1), m.group(2)
+        if toon_id in seen:
+            continue
+        seen.add(toon_id)
+        text = a.get_text(" ", strip=True)
+        title = urllib.parse.unquote(enc_title)
+        if text and "더 읽기" not in text:
+            title = text.split("/")[0].strip() or title
+        items.append(
+            {
+                "toon_id": toon_id,
+                "encoded_title": enc_title,
+                "title": title,
+                "mode": mode.kind,
+            }
+        )
+    return items
+
+
+def _fetch_cat_url(args: tuple[str, Mode]) -> list[dict[str, str]]:
+    """Worker: descarga una URL de categoría y devuelve sus series."""
+    url, mode = args
+    html = fetch_html(url)
+    if not html:
+        return []
+    return _parse_series_from_html(html, mode)
+
+
+def fetch_series_list(mode: Mode, workers: int = 10) -> list[dict[str, str]]:
+    """
+    Carga TODAS las series de un modo (Webtoon o Manhwa) en paralelo.
+    Combina la página principal + todas las categorías.
+    """
     cats = _WEBTOON_CATS if mode.kind == Mode.WEBTOON else _MANHWA_CATS
     main_path = mode.main_path
+
+    all_urls: list[str] = [f"{BASE_URL}{main_path}"] + [
+        f"{BASE_URL}{main_path}{cat}" for cat in cats
+    ]
 
     series: list[dict[str, str]] = []
     seen: set[str] = set()
 
-    # Página principal primero, luego todas las categorías
-    all_urls = [f"{BASE_URL}{main_path}"] + [
-        f"{BASE_URL}{main_path}{cat}" for cat in cats
-    ]
-
-    for url in all_urls:
-        html = fetch_html(url)
-        if not html:
-            continue
-
-        soup = _soup(html)
-        nuevas = 0
-
-        for a in soup.find_all("a", href=True):
-            m = pat.search(a["href"])
-            if not m:
-                continue
-            toon_id, enc_title = m.group(1), m.group(2)
-            if toon_id in seen:
-                continue
-            seen.add(toon_id)
-            nuevas += 1
-
-            text = a.get_text(" ", strip=True)
-            title = urllib.parse.unquote(enc_title)
-            if text and "더 읽기" not in text:
-                title = text.split("/")[0].strip() or title
-
-            series.append(
-                {
-                    "toon_id": toon_id,
-                    "encoded_title": enc_title,
-                    "title": title,
-                    "mode": mode.kind,
-                }
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_fetch_cat_url, (url, mode)): url for url in all_urls}
+        done = 0
+        for fut in as_completed(futures):
+            done += 1
+            items = fut.result()
+            nuevas = 0
+            for it in items:
+                if it["toon_id"] not in seen:
+                    seen.add(it["toon_id"])
+                    series.append(it)
+                    nuevas += 1
+            sys.stdout.write(
+                f"  {C.CYAN}[{mode}] {done}/{len(all_urls)} URLs — "
+                f"{len(series)} series{C.END}   \r"
             )
+            sys.stdout.flush()
 
-        label = url.split(main_path)[-1] or "/principal"
-        print(f"  {C.DIM}{label:<35} +{nuevas:>4}  total: {len(series)}{C.END}")
-        time.sleep(0.2)
-
+    print(f"  {C.GREEN}✔ {mode}: {len(series)} series{C.END}   ")
     return series
 
 
-# ── Limpieza de ruido en títulos de capítulos ─────────────────────────────
+def fetch_full_catalog(workers: int = 10) -> list[dict[str, str]]:
+    """
+    Carga el catálogo COMPLETO: Webtoon + Manhwa en paralelo simultáneo.
+    Devuelve lista unificada con campo 'mode' para distinguirlos.
+    """
+    all_series: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    mode_wt = Mode(Mode.WEBTOON)
+    mode_mh = Mode(Mode.MANHWA)
+
+    cats_wt = [f"{BASE_URL}{mode_wt.main_path}"] + [
+        f"{BASE_URL}{mode_wt.main_path}{c}" for c in _WEBTOON_CATS
+    ]
+    cats_mh = [f"{BASE_URL}{mode_mh.main_path}"] + [
+        f"{BASE_URL}{mode_mh.main_path}{c}" for c in _MANHWA_CATS
+    ]
+
+    all_tasks: list[tuple[str, Mode]] = [(u, mode_wt) for u in cats_wt] + [
+        (u, mode_mh) for u in cats_mh
+    ]
+
+    print(f"  {C.CYAN}Cargando {len(all_tasks)} URLs en paralelo...{C.END}")
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_fetch_cat_url, task): task for task in all_tasks}
+        done = 0
+        for fut in as_completed(futures):
+            done += 1
+            items = fut.result()
+            for it in items:
+                key = f"{it['mode']}_{it['toon_id']}"
+                if key not in seen:
+                    seen.add(key)
+                    all_series.append(it)
+            sys.stdout.write(
+                f"  {C.CYAN}{done}/{len(all_tasks)} URLs — "
+                f"{len(all_series)} series{C.END}   \r"
+            )
+            sys.stdout.flush()
+
+    # Ordenar: primero Webtoon, luego Manhwa, por título dentro de cada grupo
+    all_series.sort(key=lambda s: (s["mode"], s["title"].lower()))
+    print(
+        f"\n  {C.GREEN}✔ {len(all_series)} series en total (Webtoon + Manhwa){C.END}   "
+    )
+    return all_series
+
+
+# ── Limpieza de ruido ──────────────────────────────────────────────────────
 _NOISE_RE = re.compile(
-    r"^\d+\s*"  # número inicial "94 "
-    r"|하루전|방금전|\d+일전|오늘"  # badges de tiempo
-    r"|\d{4}-\d{2}-\d{2}"  # fecha "2026-03-07"
-    r"|\s{2,}"  # espacios múltiples
+    r"^\d+\s*"
+    r"|하루전|방금전|\d+일전|오늘"
+    r"|\d{4}-\d{2}-\d{2}"
+    r"|\s{2,}"
 )
 
 
 def _clean_chap_title(raw: str) -> str:
-    t = _NOISE_RE.sub(" ", raw).strip()
-    return t
+    return _NOISE_RE.sub(" ", raw).strip()
 
 
-# ── Ficha de serie (título, autor, sinopsis, lista de capítulos) ────────────
+# ── Ficha de serie ─────────────────────────────────────────────────────────
 def parse_series_page(
-    html: str,
-    toon_id: str,
-    enc_title: str,
-    mode: Mode,
+    html: str, toon_id: str, enc_title: str, mode: Mode
 ) -> tuple[str, str, str, list[dict]]:
     soup = _soup(html)
     title = urllib.parse.unquote(enc_title)
 
-    # Título
     for sel in ["h1", ".toon-title", ".series-title", ".view-title", "#toon_title"]:
         node = soup.select_one(sel)
         if node and node.get_text(strip=True):
             title = node.get_text(strip=True)
             break
 
-    # Autor / sinopsis desde <meta name="description">
     autor = ""
     sinopsis = ""
     meta = soup.find("meta", attrs={"name": "description"})
@@ -316,7 +367,6 @@ def parse_series_page(
                 sinopsis = node.get_text(strip=True)[:500]
                 break
 
-    # Capítulos → ahora guardamos num + título
     chap_re = mode.chapter_href_re(toon_id)
     seen_nums: set[int] = set()
     chapters: list[dict] = []
@@ -329,12 +379,10 @@ def parse_series_page(
         if num in seen_nums:
             continue
         seen_nums.add(num)
-
         raw_text = a.get_text(" ", strip=True)
         chap_title = _clean_chap_title(raw_text) or f"Cap {num}"
         chapters.append({"num": num, "title": chap_title})
 
-    # También buscar en HTML crudo (pero aquí no tendremos títulos bonitos)
     for mm in chap_re.finditer(html):
         num = int(mm.group(1))
         if num not in seen_nums:
@@ -345,14 +393,9 @@ def parse_series_page(
     return title, autor, sinopsis, chapters
 
 
-# ── Imágenes dentro de un capítulo ─────────────────────────────────────────
+# ── Imágenes de un capítulo ────────────────────────────────────────────────
 def extract_images(chapter_html: str) -> list[str]:
-    """
-    Estrategia 1: var toon_img = '<base64>';  → decodificar y extraer <img src>
-    Estrategia 2: URLs CDN directas en el HTML
-    Estrategia 3: <img> dentro de #toon_img o cualquier <img> con extensión válida
-    """
-    # ── Estrategia 1: base64 ──────────────────────────────────────────────
+    # Estrategia 1: base64
     m64 = re.search(r"var\s+toon_img\s*=\s*['\"]([A-Za-z0-9+/=]+)['\"];", chapter_html)
     if m64:
         try:
@@ -369,7 +412,7 @@ def extract_images(chapter_html: str) -> list[str]:
         except Exception as e:
             print(f"  {C.YELLOW}[base64 err] {e}{C.END}")
 
-    # ── Estrategia 2: CDN en HTML crudo ──────────────────────────────────
+    # Estrategia 2: CDN en HTML crudo
     cdn_urls = [
         u
         for u in dict.fromkeys(CDN_RE.findall(chapter_html))
@@ -378,10 +421,9 @@ def extract_images(chapter_html: str) -> list[str]:
     if cdn_urls:
         return cdn_urls
 
-    # ── Estrategia 3: <img> en scope #toon_img o global ──────────────────
+    # Estrategia 3: <img> en scope
     soup = _soup(chapter_html)
     scope = soup.select_one("#toon_img") or soup
-
     VALID_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
     candidates: list[str] = []
     for img in scope.find_all("img"):
@@ -401,10 +443,9 @@ def extract_images(chapter_html: str) -> list[str]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  DESCARGA DE IMÁGENES
+#  DESCARGA
 # ══════════════════════════════════════════════════════════════════════════════
 def _ext_for(url: str) -> str:
-    """Determina la extensión de salida."""
     if HAS_PILLOW and USER_FORMAT != "original":
         return USER_FORMAT
     url_ext = os.path.splitext(url.split("?")[0])[-1].lower().lstrip(".")
@@ -448,9 +489,6 @@ def dl_worker(args: tuple[str, str, int]) -> bool:
     return False
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  EMPAQUETADO
-# ══════════════════════════════════════════════════════════════════════════════
 def pack_chapter(src_folder: str, out_path: str, fmt: str) -> None:
     files = sorted(
         os.path.join(src_folder, f)
@@ -459,7 +497,6 @@ def pack_chapter(src_folder: str, out_path: str, fmt: str) -> None:
     )
     if not files:
         return
-
     if fmt == "pdf" and HAS_PILLOW and Image is not None:
         pages: list[Any] = []
         for p in files:
@@ -476,7 +513,7 @@ def pack_chapter(src_folder: str, out_path: str, fmt: str) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  FLUJO PRINCIPAL: DESCARGA DE GALERÍA
+#  DESCARGA DE GALERÍA
 # ══════════════════════════════════════════════════════════════════════════════
 def _safe_name(s: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "", s).strip()
@@ -488,7 +525,6 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
 
     print(f"\n{C.CYAN}[*] Cargando ficha · {mode} · '{disp}' ({toon_id})…{C.END}")
 
-    # ── Obtener metadatos ──────────────────────────────────────────────────
     data = METADATA_CACHE.get(key)
     if not data:
         html = fetch_html(mode.series_url(toon_id, enc_title))
@@ -499,11 +535,9 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
             html, toon_id, enc_title, mode
         )
 
-        # Fallback: probar capítulos 1-500 si la página no los lista
         if not chapters:
             print(
-                f"  {C.YELLOW}[!] No se detectaron capítulos en la ficha, "
-                f"probando rango 1-500…{C.END}"
+                f"  {C.YELLOW}[!] No se detectaron capítulos, probando rango 1-500…{C.END}"
             )
             for n in range(1, 501):
                 resp = SESSION.head(mode.chapter_url(toon_id, n, enc_title), timeout=5)
@@ -530,7 +564,6 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
         print(f"{C.RED}[!] 0 capítulos encontrados.{C.END}")
         return
 
-    # ── Mostrar ficha ──────────────────────────────────────────────────────
     print(f"\n  {C.GREEN}{C.BOLD}{title}{C.END}")
     print(f"  Tipo    : {C.CYAN}{mode}{C.END}")
     print(f"  Autor   : {autor_s or C.YELLOW + 'N/A' + C.END}")
@@ -539,7 +572,6 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
     )
     print(f"  Caps    : {C.GREEN}{len(all_chapters)}{C.END}")
 
-    # ── Selección de capítulos ────────────────────────────────────────────
     PAGE = 20
     show_off = 0
     selection = ""
@@ -551,18 +583,15 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
             chap = all_chapters[i]
             print(f"  {C.BOLD}{i + 1:4d}.{C.END} {chap['title'][:55]}")
         print(f"  {C.PURPLE}{'─' * 62}{C.END}")
-
         nav = ""
         if end_idx < len(all_chapters):
             nav += f"  {C.CYAN}n{C.END}=siguiente  "
         if show_off > 0:
             nav += f"  {C.CYAN}p{C.END}=anterior"
         print(nav or "", end="")
-
         raw = input(
             f"\n\n  {C.YELLOW}Caps a bajar ('1', '3-5,9', 'all') ➜ {C.END}"
         ).strip()
-
         if raw.lower() == "n" and end_idx < len(all_chapters):
             show_off += PAGE
         elif raw.lower() == "p" and show_off > 0:
@@ -573,7 +602,6 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
             selection = raw
             break
 
-    # Resolver selección → lista de diccionarios de capítulo
     selected: list[dict] = []
     if selection.lower() == "all":
         selected = list(all_chapters)
@@ -603,7 +631,6 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
     if confirm == "n":
         return
 
-    # ── Preparar carpeta ───────────────────────────────────────────────────
     safe_title = _safe_name(title)
     out_folder = f"{safe_title} [{toon_id}]"
     os.makedirs(out_folder, exist_ok=True)
@@ -625,18 +652,14 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
             ensure_ascii=False,
         )
 
-    # ── Descargar capítulos ────────────────────────────────────────────────
     ext_out = OUTPUT_TYPE.lower()
     ok = 0
-
     print(f"\n{C.CYAN}[*] Descargando {len(selected)} capítulo(s)…{C.END}\n")
 
     for i, chap in enumerate(selected, 1):
         num = chap["num"]
         safe_chap_title = _safe_name(chap["title"])
-        # Nombre del archivo: "0094_Título del Capítulo"
         chap_name = f"{num:04d}_{safe_chap_title}"
-
         label = f"[{i}/{len(selected)}] {chap['title'][:50]}"
         print(f"  {C.BOLD}{label}{C.END}", end=" ", flush=True)
 
@@ -651,12 +674,9 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
             continue
 
         print(f"→ {len(imgs)} imgs", flush=True)
-
-        # Carpeta temporal para las imágenes del capítulo
         chap_dir = os.path.join(out_folder, chap_name)
         os.makedirs(chap_dir, exist_ok=True)
 
-        # Descarga paralela
         done = 0
         with ThreadPoolExecutor(max_workers=MAX_WORKERS_DL) as exe:
             futures = {
@@ -669,10 +689,8 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
                 sys.stdout.flush()
         print()
 
-        # Empaquetar
         out_file = os.path.join(out_folder, f"{chap_name}.{ext_out}")
         pack_chapter(chap_dir, out_file, ext_out)
-
         if DELETE_TEMP:
             shutil.rmtree(chap_dir, ignore_errors=True)
 
@@ -685,7 +703,7 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  BÚSQUEDA
+#  BÚSQUEDA (modo individual)
 # ══════════════════════════════════════════════════════════════════════════════
 def search_series(query: str, mode: Mode) -> list[dict[str, str]]:
     print(f"  {C.CYAN}[*] Cargando catálogo de {mode}…{C.END}")
@@ -693,13 +711,9 @@ def search_series(query: str, mode: Mode) -> list[dict[str, str]]:
     if not all_s:
         print(f"  {C.YELLOW}[!] Catálogo vacío o no disponible.{C.END}")
         return []
-
     print(f"  {C.GREEN}[+] {len(all_s)} series en catálogo.{C.END}")
-
-    # Sin query → devolver todo
     if not query.strip():
         return all_s
-
     q = query.lower()
     return [
         s
@@ -710,10 +724,125 @@ def search_series(query: str, mode: Mode) -> list[dict[str, str]]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  CATÁLOGO UNIFICADO (Webtoon + Manhwa)
+# ══════════════════════════════════════════════════════════════════════════════
+# Caché del catálogo completo para no volver a descargar en la misma sesión
+_FULL_CATALOG_CACHE: list[dict[str, str]] = []
+
+
+def menu_catalog() -> None:
+    """
+    Carga el catálogo completo (Webtoon + Manhwa) en paralelo y presenta
+    una UI de navegación con filtro por texto y descarga por número.
+    """
+    global _FULL_CATALOG_CACHE
+
+    header()
+    print(f"  {C.PURPLE}{C.BOLD}Catálogo Completo — Webtoon + Manhwa{C.END}\n")
+
+    if not _FULL_CATALOG_CACHE:
+        _FULL_CATALOG_CACHE = fetch_full_catalog(workers=12)
+
+    if not _FULL_CATALOG_CACHE:
+        print(f"  {C.RED}No se pudieron cargar series.{C.END}")
+        input(f"  {C.CYAN}Enter para volver…{C.END}")
+        return
+
+    all_series = _FULL_CATALOG_CACHE
+    filtered = all_series[:]
+    filter_text = ""
+    page = 0
+
+    while True:
+        header()
+        total_pages = max(1, (len(filtered) + MAX_RESULTS_PAGE - 1) // MAX_RESULTS_PAGE)
+        page = max(0, min(page, total_pages - 1))
+        start = page * MAX_RESULTS_PAGE
+        end = min(start + MAX_RESULTS_PAGE, len(filtered))
+
+        # Cabecera
+        cache_note = f"  {C.DIM}(en caché — usa {C.CYAN}r{C.DIM} para recargar){C.END}"
+        print(
+            f"  {C.PURPLE}Catálogo{C.END}  {C.BLUE}│{C.END}"
+            f"  {C.BOLD}{len(filtered)}{C.END}/{len(all_series)} series"
+            + (
+                f"  {C.BLUE}│{C.END}  filtro: {C.YELLOW}{filter_text}{C.END}"
+                if filter_text
+                else ""
+            )
+            + f"  {C.BLUE}│{C.END}  pág {C.BOLD}{page + 1}/{total_pages}{C.END}"
+            + cache_note
+        )
+        print(f"  {C.PURPLE}{'─' * 62}{C.END}")
+
+        for i, s in enumerate(filtered[start:end]):
+            tipo_badge = (
+                f"{C.CYAN}[WT]{C.END}"
+                if s["mode"] == Mode.WEBTOON
+                else f"{C.YELLOW}[MH]{C.END}"
+            )
+            print(
+                f"  {C.BOLD}{start + i + 1:4d}.{C.END}  {tipo_badge}  {s['title'][:50]}"
+            )
+
+        print(f"  {C.PURPLE}{'─' * 62}{C.END}")
+        print(
+            f"\n  {C.CYAN}n{C.END}=sig  {C.CYAN}p{C.END}=ant"
+            f"  {C.CYAN}f{C.END}=filtrar  {C.CYAN}r{C.END}=recargar"
+            f"  {C.CYAN}q{C.END}=volver  {C.CYAN}[número]{C.END}=descargar"
+        )
+        cmd = input(f"\n  {C.YELLOW}➜ {C.END}").strip()
+
+        if cmd.lower() == "q":
+            return
+
+        elif cmd.lower() == "f":
+            ft = input(
+                f"  {C.YELLOW}Filtrar por nombre (vacío = mostrar todo) ➜ {C.END}"
+            ).strip()
+            filter_text = ft
+            filtered = (
+                [s for s in all_series if ft.lower() in s["title"].lower()]
+                if ft
+                else all_series[:]
+            )
+            page = 0
+
+        elif cmd.lower() == "r":
+            _FULL_CATALOG_CACHE.clear()
+            print(f"  {C.CYAN}Recargando…{C.END}")
+            _FULL_CATALOG_CACHE[:] = fetch_full_catalog(workers=12)
+            all_series = _FULL_CATALOG_CACHE
+            filtered = (
+                [s for s in all_series if filter_text.lower() in s["title"].lower()]
+                if filter_text
+                else all_series[:]
+            )
+            page = 0
+
+        elif cmd.lower() == "n" and page < total_pages - 1:
+            page += 1
+
+        elif cmd.lower() == "p" and page > 0:
+            page -= 1
+
+        elif cmd:
+            idxs = _parse_positions(cmd, len(filtered))
+            if not idxs:
+                print(f"  {C.RED}Entrada no válida.{C.END}")
+                time.sleep(0.8)
+                continue
+            for idx in idxs:
+                s = filtered[idx]
+                mode = Mode(s["mode"])
+                download_gallery(s["toon_id"], s["encoded_title"], mode)
+            input(f"\n  {C.GREEN}Listo. Enter para continuar…{C.END}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  UTILIDADES DE PARSEO
 # ══════════════════════════════════════════════════════════════════════════════
 def _parse_nums(s: str) -> set[int]:
-    """'3,5-7,10' → {3,5,6,7,10}"""
     s = s.replace(" ", "")
     nums: set[int] = set()
     for part in s.split(","):
@@ -729,7 +858,6 @@ def _parse_nums(s: str) -> set[int]:
 
 
 def _parse_positions(s: str, length: int) -> list[int]:
-    """Igual pero los números son posiciones 1-N → índices 0-based."""
     idxs: set[int] = set()
     for n in _parse_nums(s):
         if 1 <= n <= length:
@@ -752,11 +880,7 @@ def choose_mode() -> Mode:
             return Mode(Mode.MANHWA)
 
 
-def results_menu(
-    results: list[dict[str, str]],
-    query: str,
-    mode: Mode,
-) -> None:
+def results_menu(results: list[dict[str, str]], query: str, mode: Mode) -> None:
     page = 0
     while True:
         header()
@@ -777,7 +901,6 @@ def results_menu(
             f"  {C.CYAN}n{C.END}=sig  {C.CYAN}p{C.END}=ant  "
             f"{C.CYAN}q{C.END}=volver  o número/rango para descargar"
         )
-
         sel = input(f"\n  {C.YELLOW}Acción ➜ {C.END}").strip().lower()
         if sel == "n" and end < len(results):
             page += 1
@@ -806,7 +929,7 @@ def main() -> None:
             f"  ├─ {C.BOLD}1.{C.END} Descargar por ID  "
             f"(ej: {C.DIM}10543 %B0%ED%BA%ED…{C.END})"
         )
-        print(f"  ├─ {C.BOLD}2.{C.END} Buscar serie")
+        print(f"  ├─ {C.BOLD}2.{C.END} Buscar / explorar series")
         print(f"  └─ {C.BOLD}3.{C.END} Salir")
         print(
             f"\n  {C.PURPLE}Configuración:{C.END}  "
@@ -830,14 +953,28 @@ def main() -> None:
             input(f"\n  {C.CYAN}Enter para continuar…{C.END}")
 
         elif op == "2":
-            mode = choose_mode()
-            query = input(f"  {C.CYAN}Búsqueda (Enter para ver todo): {C.END}").strip()
-            results = search_series(query, mode)
-            if not results:
-                print(f"  {C.RED}Sin resultados.{C.END}")
-                time.sleep(2)
-            else:
-                results_menu(results, query or "todos", mode)
+            # Sub-menú: 0=catálogo completo, 1=Webtoon, 2=Manhwa
+            print(f"\n  {C.BOLD}¿Qué quieres explorar?{C.END}")
+            print(
+                f"    {C.CYAN}0{C.END}. 📂 Catálogo completo  {C.DIM}(Webtoon + Manhwa){C.END}"
+            )
+            print(f"    {C.CYAN}1{C.END}. Webtoon")
+            print(f"    {C.CYAN}2{C.END}. Manhwa")
+            sub = input(f"  {C.YELLOW}Elige ➜ {C.END}").strip()
+
+            if sub == "0":
+                menu_catalog()
+            elif sub in ("1", "2"):
+                mode = Mode(Mode.WEBTOON if sub == "1" else Mode.MANHWA)
+                query = input(
+                    f"  {C.CYAN}Búsqueda (Enter para ver todo): {C.END}"
+                ).strip()
+                results = search_series(query, mode)
+                if not results:
+                    print(f"  {C.RED}Sin resultados.{C.END}")
+                    time.sleep(2)
+                else:
+                    results_menu(results, query or "todos", mode)
 
         elif op == "3":
             print(f"\n  {C.GREEN}¡Hasta luego!{C.END}\n")

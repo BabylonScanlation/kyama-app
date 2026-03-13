@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════╗
-║  PICACOMIC DOWNLOADER  v1.0.0            ║
+║  PICACOMIC DOWNLOADER  v1.1.0            ║
 ║  picacomic.com  /  哔咔漫画               ║
 ╚══════════════════════════════════════════╝
 
@@ -9,8 +9,6 @@ Dependencias:
 
 Uso:
     python picacomic_downloader.py
-
-Necesitás una cuenta en la app oficial para poder iniciar sesión.
 """
 
 import hashlib
@@ -27,8 +25,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from getpass import getpass
 from io import BytesIO
 
-# curl_cffi imita el TLS fingerprint del cliente real (necesario para la API de Pica)
-# que usa Cloudflare para bloquear requests/urllib3 estándar
 try:
     from curl_cffi import requests
     from curl_cffi.requests import Session as CurlSession
@@ -52,28 +48,22 @@ except ImportError:
 # ══════════════════════════════════════════════════════════════════════════════
 #  CONFIGURACIÓN
 # ══════════════════════════════════════════════════════════════════════════════
-OUTPUT_TYPE = "cbz"  # 'zip' | 'cbz' | 'pdf'
-USER_FORMAT = "original"  # 'original' | 'jpg' | 'png' | 'webp'
+OUTPUT_TYPE = "cbz"
+USER_FORMAT = "original"
 DELETE_TEMP = True
-MAX_WORKERS = 4  # La API es sensible; no subir demasiado
-REQUEST_DELAY = 0.3  # segundos entre llamadas a la API
-IMAGE_QUALITY = "original"  # 'original' | 'medium' | 'low'
-# ── Credenciales ─────────────────────────────────────────────────────────────
+MAX_WORKERS = 40
+REQUEST_DELAY = 0.3
+IMAGE_QUALITY = "original"
 AUTO_USER = "lucaaaa09"
 AUTO_PASS = "Aa0!Bb2?Cc4_"
-# Token JWT hardcodeado (se obtiene con la app oficial, dura ~7 días)
-# Si está seteado se salta el login completamente.
 MANUAL_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OWFmYWM1MGZiMzgxZGM2ZjU5OWI1ZDYiLCJlbWFpbCI6Imx1Y2FhYWEwOSIsInJvbGUiOiJtZW1iZXIiLCJuYW1lIjoiTHVjYXMgR29sZHN0ZWluIiwidmVyc2lvbiI6IjIuMi4xLjIuMy4zIiwiYnVpbGRWZXJzaW9uIjoiNDQiLCJwbGF0Zm9ybSI6ImFuZHJvaWQiLCJpYXQiOjE3NzMxMjQ4MDQsImV4cCI6MTc3MzcyOTYwNH0.XHxBVgHxzhwnuRhLgABtlsmmVIx4NLY4WcALOBbW7F0"
-# ══════════════════════════════════════════════════════════════════════════════
 
-# ── Constantes de la API ─────────────────────────────────────────────────────
 BASE_URL = "https://picaapi.picacomic.com"
 API_KEY = "C69BAF41DA5ABD1FFEDC6D2FEA56B"
 SECRET = r"~d}$Q7$eIni=V)9\RK/P.RM4;9[7|@/CA}b~OW!3?EV`:<>M7pddUBL5n|0/*Cn"
 APP_VER = "2.2.1.2.3.3"
 BUILD_VER = "44"
 
-# Ordenamiento para listados
 SORT_OPTS = {
     "ua": "Por defecto",
     "dd": "Más nuevos",
@@ -84,18 +74,13 @@ SORT_OPTS = {
 
 _token: str = ""
 
-# Crear sesión según disponibilidad de curl_cffi
 if _USE_CURL:
-    # Usar curl_cffi sin impersonate para no interferir con los headers personalizados.
-    # El TLS fingerprint nativo de libcurl ya difiere del de Python urllib3
-    # y es suficiente para sortear el filtro de Cloudflare.
     _sess = CurlSession()
 else:
     _sess = requests.Session()
     _sess.headers.update({"User-Agent": "okhttp/3.8.1"})
 
 
-# ── colores ──────────────────────────────────────────────────────────────────
 class C:
     PU = "\033[95m"
     CY = "\033[96m"
@@ -104,6 +89,7 @@ class C:
     YE = "\033[93m"
     RE = "\033[91m"
     BO = "\033[1m"
+    DIM = "\033[2m"
     EN = "\033[0m"
 
 
@@ -111,34 +97,30 @@ def header(subtitle: str = ""):
     os.system("cls" if os.name == "nt" else "clear")
     print(f"{C.BL}╔══════════════════════════════╗{C.EN}")
     print(
-        f"{C.BL}║{C.EN}  {C.BO}{C.PU}哔咔漫画  DOWNLOADER{C.EN}  {C.BL}v1.5{C.EN}  {C.BL}║{C.EN}"
+        f"{C.BL}║{C.EN}  {C.BO}{C.PU}哔咔漫画  DOWNLOADER{C.EN}  {C.BL}v1.1{C.EN}  {C.BL}║{C.EN}"
     )
     print(f"{C.BL}╚══════════════════════════════╝{C.EN}")
     print()
 
 
+def _bar(done: int, total: int, width: int = 30) -> str:
+    pct = done / max(total, 1)
+    fill = int(width * pct)
+    return f"[{C.CY}{'█' * fill}{C.DIM}{'─' * (width - fill)}{C.EN}] {done}/{total}"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  FIRMA  (HMAC-SHA256)
-#  Algoritmo: lowercase(url_relativa + timestamp + nonce + METHOD + API_KEY)
-#  luego HMAC-SHA256 con SECRET como clave → hex
+#  FIRMA
 # ══════════════════════════════════════════════════════════════════════════════
 def _sign(path: str, ts: str, nonce: str, method: str) -> str:
-    # El Go hace: strings.Replace(fullURL, "https://picaapi.picacomic.com/", "", 1)
-    # Resultado: "categories", "auth/sign-in", "comics?page=1&c=baihe" (sin / inicial)
     clean = path.lstrip("/")
     raw = (clean + ts + nonce + method + API_KEY).lower()
-    sig = hmac.new(
-        SECRET.encode("utf-8"),
-        raw.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return sig
+    return hmac.new(SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
 
 
 def _build_headers(path: str, method: str) -> dict:
     ts = str(int(time.time()))
-    nonce = uuid.uuid4().hex  # UUID sin guiones
-
+    nonce = uuid.uuid4().hex
     h = {
         "api-key": API_KEY,
         "accept": "application/vnd.picacomic.com.v1+json",
@@ -167,8 +149,6 @@ def _api_get(path: str, params: dict | None = None, retries=3) -> dict | None:
     url = BASE_URL + "/" + path.lstrip("/")
     for attempt in range(retries):
         try:
-            # La firma debe incluir los query params (igual que la implementación Go)
-            # Go: sign(fullURL.replace(base,"")) → "comics?page=1&c=baihe&s=dd"
             if params:
                 from urllib.parse import urlencode
 
@@ -179,8 +159,7 @@ def _api_get(path: str, params: dict | None = None, retries=3) -> dict | None:
                 url, params=params, headers=_build_headers(sign_path, "GET"), timeout=15
             )
             if r.status_code == 200:
-                j = r.json()
-                return j
+                return r.json()
             if r.status_code in (400, 401, 403, 404):
                 try:
                     err = r.json()
@@ -212,7 +191,6 @@ def _api_post(path: str, body: dict, retries=3) -> dict | None:
                 data = r.json()
             except Exception:
                 data = None
-            # Adjuntar headers HTTP al dict para que login() pueda inspeccionarlos
             if isinstance(data, dict):
                 data["_resp_headers"] = dict(r.headers)
                 data["_resp_status"] = r.status_code
@@ -232,10 +210,7 @@ def _api_post(path: str, body: dict, retries=3) -> dict | None:
 
 
 def _dl_image(url: str, path: str, referer: str = BASE_URL) -> bool:
-    headers = {
-        "Referer": referer,
-        "User-Agent": "okhttp/3.8.1",
-    }
+    headers = {"Referer": referer, "User-Agent": "okhttp/3.8.1"}
     for attempt in range(3):
         try:
             r = _sess.get(url, headers=headers, timeout=30)
@@ -278,25 +253,16 @@ def _save_img(raw: bytes, path: str):
 #  AUTENTICACIÓN
 # ══════════════════════════════════════════════════════════════════════════════
 def login(email: str, password: str) -> bool:
-    """
-    PicaComic acepta tanto email como nombre de usuario en el campo 'email'.
-    La respuesta exitosa tiene el token en resp["data"]["token"].
-    """
     global _token
-
     resp = _api_post("/auth/sign-in", {"email": email, "password": password})
     if resp is None:
         return False
-
-    # Buscar el token en el body (múltiples estructuras posibles)
     token = (
         (resp.get("data") or {}).get("token")
         or resp.get("token")
         or ((resp.get("data") or {}).get("user") or {}).get("token")
         or ""
     )
-
-    # Si no está en el body, buscar en los response headers
     if not token:
         hdrs = resp.get("_resp_headers") or {}
         token = (
@@ -304,51 +270,25 @@ def login(email: str, password: str) -> bool:
             or hdrs.get("Authorization")
             or hdrs.get("token")
             or hdrs.get("Token")
-            or hdrs.get("x-token")
-            or hdrs.get("X-Token")
             or ""
         )
-
     if token:
-        # Limpiar prefijo "Bearer " si lo hubiera
         _token = token.removeprefix("Bearer ").strip()
         return True
-
-    # Mostrar todo para diagnosticar
     code = resp.get("code", 0)
     msg = resp.get("message", "")
-    hdrs = resp.get("_resp_headers") or {}
-    # Filtrar headers relevantes (quitar los comunes que no ayudan)
-    interesting = {
-        k: v
-        for k, v in hdrs.items()
-        if any(
-            x in k.lower() for x in ("token", "auth", "set-cookie", "x-", "location")
-        )
-    }
     print(f"\n  {C.YE}⚠  Login OK (code={code}, msg={msg}) pero sin token.{C.EN}")
-    print(
-        f"  {C.CY}Body: {json.dumps({k: v for k, v in resp.items() if not k.startswith('_')}, ensure_ascii=False)[:200]}{C.EN}"
-    )
-    print(
-        f"  {C.CY}Headers relevantes: {json.dumps(interesting, ensure_ascii=False)[:300]}{C.EN}"
-    )
     return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  CONSTRUCCIÓN DE URL DE IMAGEN
-#  El JSON devuelve: { "fileServer": "https://...", "path": "...", "originalName": "..." }
-#  URL final: fileServer/static/path
-#  Algunos fileServer ya incluyen el path completo (proxy CDN).
+#  URL DE IMAGEN
 # ══════════════════════════════════════════════════════════════════════════════
 def _img_url(media: dict) -> str:
     server = media.get("fileServer", "").rstrip("/")
     path = media.get("path", "")
-    # Si el path ya es una URL completa, usarla directo
     if path.startswith("http"):
         return path
-    # Algunos fileServers usan proxy: server/static/path
     if "tobeimg" in path or path.startswith("tobeimg"):
         return f"{server}/{path}"
     return f"{server}/static/{path}"
@@ -361,13 +301,12 @@ def get_categories() -> list[dict]:
     resp = _api_get("/categories")
     if not resp or resp.get("code") != 200:
         return []
-    data = resp.get("data") or {}
-    cats = data.get("categories", [])
+    cats = (resp.get("data") or {}).get("categories", [])
     return [c for c in cats if c.get("isWeb") is not True]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  API — COMICS POR CATEGORÍA
+#  API — COMICS POR CATEGORÍA (una página)
 # ══════════════════════════════════════════════════════════════════════════════
 def get_comics_by_category(category: str, page=1, sort="dd") -> tuple[list[dict], int]:
     resp = _api_get("/comics", params={"c": category, "page": page, "s": sort})
@@ -381,7 +320,67 @@ def get_comics_by_category(category: str, page=1, sort="dd") -> tuple[list[dict]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  API — BÚSQUEDA AVANZADA
+#  CATÁLOGO COMPLETO — todas las categorías en paralelo
+# ══════════════════════════════════════════════════════════════════════════════
+def _fetch_global_page(page: int, sort: str) -> tuple[int, list[dict], int]:
+    """GET /comics?page=N&s=sort — catálogo global sin filtro de categoría."""
+    resp = _api_get("/comics", params={"page": page, "s": sort})
+    if not resp or resp.get("code") != 200:
+        return page, [], 0
+    outer = (resp.get("data") or {}).get("comics") or {}
+    docs = outer.get("docs", [])
+    total = outer.get("pages", 1)
+    return page, [_parse_comic_stub(d) for d in docs], total
+
+
+def fetch_full_catalog(
+    sort: str = "dd", workers: int = 20, page_limit: int | None = None
+) -> list[dict]:
+    """
+    Catálogo global: GET /comics?page=N&s=sort
+    135,748 series · 6,788 páginas · sin deduplicación necesaria.
+    Con workers=20 → ~340 batches en paralelo (~3-5 min completo).
+    page_limit: si se especifica, carga solo las primeras N páginas.
+    """
+    # Paso 1: pág 1 para saber el total de páginas
+    print(f"  {C.YE}Consultando catálogo global…{C.EN}")
+    _, first_comics, total_pages = _fetch_global_page(1, sort)
+    if not first_comics:
+        print(f"  {C.RE}No se pudo acceder al catálogo global.{C.EN}")
+        return []
+
+    if page_limit:
+        total_pages = min(total_pages, page_limit)
+    print(f"  {C.GR}{total_pages} páginas · ~{total_pages * 20} series{C.EN}")
+
+    all_comics: list[dict] = list(first_comics)
+    remaining = list(range(2, total_pages + 1))
+    done = 1
+
+    # Paso 2: resto en paralelo, en bloques para no saturar
+    BATCH = workers * 5  # lanzar de a 100 páginas simultáneas
+    for batch_start in range(0, len(remaining), BATCH):
+        batch = remaining[batch_start : batch_start + BATCH]
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(_fetch_global_page, pg, sort): pg for pg in batch}
+            for fut in as_completed(futs):
+                _, comics, _ = fut.result()
+                all_comics.extend(comics)
+                done += 1
+                pct = int(40 * done / total_pages)
+                bar = f"{'█' * pct}{'─' * (40 - pct)}"
+                sys.stdout.write(
+                    f"\r  {C.CY}[{bar}]{C.EN} {done}/{total_pages} págs  "
+                    f"{C.GR}{len(all_comics)} series{C.EN}   "
+                )
+                sys.stdout.flush()
+
+    print(f"\n  {C.GR}✔ {len(all_comics)} series cargadas{C.EN}                    ")
+    return all_comics
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  API — BÚSQUEDA
 # ══════════════════════════════════════════════════════════════════════════════
 def search(
     keyword: str, page=1, sort="dd", categories: list | None = None
@@ -413,7 +412,7 @@ def _parse_comic_stub(d: dict) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  API — INFO COMPLETA DEL CÓMIC
+#  API — INFO / CAPÍTULOS / PÁGINAS
 # ══════════════════════════════════════════════════════════════════════════════
 def get_comic_info(comic_id: str) -> dict:
     resp = _api_get(f"/comics/{comic_id}")
@@ -436,9 +435,6 @@ def get_comic_info(comic_id: str) -> dict:
     }
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  API — CAPÍTULOS (eps)
-# ══════════════════════════════════════════════════════════════════════════════
 def get_episodes(comic_id: str) -> list[dict]:
     eps = []
     page = 1
@@ -452,7 +448,6 @@ def get_episodes(comic_id: str) -> list[dict]:
         if page >= data.get("pages", 1):
             break
         page += 1
-    # Ordenar por order (numérico)
     eps.sort(key=lambda e: e.get("order", 0))
     return [
         {
@@ -464,9 +459,6 @@ def get_episodes(comic_id: str) -> list[dict]:
     ]
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  API — PÁGINAS DE UN CAPÍTULO
-# ══════════════════════════════════════════════════════════════════════════════
 def get_pages(comic_id: str, ep_order: int) -> list[dict]:
     pages = []
     page = 1
@@ -482,7 +474,7 @@ def get_pages(comic_id: str, ep_order: int) -> list[dict]:
         if page >= data.get("pages", 1):
             break
         page += 1
-    return pages  # cada item tiene {"media": {"fileServer","path","originalName"}}
+    return pages
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -502,7 +494,6 @@ def download_chapter(comic: dict, ep: dict) -> str | None:
     chname = _clean(ep.get("title", "Cap"))[:40]
     order = ep.get("order", 1)
     folder = f"{series} - {chname} [ord{order}]"
-
     os.makedirs(folder, exist_ok=True)
     print(f"\n  {C.GR}⬇  {series[:35]} / {chname}{C.EN}")
 
@@ -512,7 +503,6 @@ def download_chapter(comic: dict, ep: dict) -> str | None:
         shutil.rmtree(folder, ignore_errors=True)
         return None
 
-    # Construir lista de (url, path_local)
     tasks = []
     for i, pg in enumerate(pages):
         media = pg.get("media", {})
@@ -522,8 +512,7 @@ def download_chapter(comic: dict, ep: dict) -> str | None:
         out_ext = USER_FORMAT if (has_pillow and USER_FORMAT != "original") else src_ext
         if out_ext == "original":
             out_ext = src_ext
-        dest = os.path.join(folder, f"{i + 1:03d}.{out_ext}")
-        tasks.append((url, dest))
+        tasks.append((url, os.path.join(folder, f"{i + 1:03d}.{out_ext}")))
 
     comp = 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
@@ -532,15 +521,13 @@ def download_chapter(comic: dict, ep: dict) -> str | None:
         }
         for fut in as_completed(futs):
             comp += 1
-            pct = int(30 * comp / len(tasks))
-            bar = "█" * pct + "─" * (30 - pct)
-            sys.stdout.write(f"\r   [{C.CY}{bar}{C.EN}] {comp}/{len(tasks)}")
+            sys.stdout.write(f"\r   {_bar(comp, len(tasks))}")
             sys.stdout.flush()
     print()
 
     ext_out = "cbz" if OUTPUT_TYPE == "cbz" else OUTPUT_TYPE.lower()
     out_file = f"{folder}.{ext_out}"
-    print(f"   📦 Empaquetando {ext_out.upper()}...")
+    print(f"   📦 Empaquetando {ext_out.upper()}…")
 
     if ext_out == "pdf" and has_pillow and Image is not None:
         files = sorted(os.listdir(folder))
@@ -586,12 +573,22 @@ def parse_sel(s: str, n: int) -> list[int]:
     return sorted(idxs)
 
 
+def _print_comics_list(comics: list[dict], offset: int = 0):
+    for i, c in enumerate(comics):
+        fin = f"{C.GR}✔{C.EN}" if c.get("finished") else f"{C.YE}…{C.EN}"
+        eps = f"{C.BL}{c['eps']:>2}ep{C.EN}"
+        num = f"{C.BO}{offset + i + 1:>4}.{C.EN}"
+        titl = c["title"][:46]
+        cats = f"{C.PU}{','.join(c.get('categories', []))[:20]}{C.EN}"
+        print(f"  {num} {fin} {eps}  {titl:<46}  {cats}")
+
+
 def show_comic_and_choose_eps(comic_id: str):
-    header("⚡ Cargando...")
+    header("⚡ Cargando…")
     info = get_comic_info(comic_id)
     if not info:
         print(f"  {C.RE}No se pudo cargar el cómic.{C.EN}")
-        input("\n  Enter para volver...")
+        input("\n  Enter para volver…")
         return
 
     header(info["title"][:38])
@@ -607,14 +604,14 @@ def show_comic_and_choose_eps(comic_id: str):
         f"  {status}  {C.BL}│{C.EN}  {info['pages']} págs  {C.BL}│{C.EN}  {C.RE}❤ {info['likes']}{C.EN}"
     )
     if info.get("desc"):
-        print(f"\n  {C.EN}{info['desc'][:120]}{C.EN}")
+        print(f"\n  {info['desc'][:120]}")
     print()
 
-    print(f"  {C.YE}Cargando capítulos...{C.EN}")
+    print(f"  {C.YE}Cargando capítulos…{C.EN}")
     eps = get_episodes(comic_id)
     if not eps:
         print(f"  {C.RE}Sin capítulos disponibles.{C.EN}")
-        input("\n  Enter para volver...")
+        input("\n  Enter para volver…")
         return
 
     print(f"  {C.PU}{len(eps)} capítulos{C.EN}\n")
@@ -631,39 +628,73 @@ def show_comic_and_choose_eps(comic_id: str):
     for idx in idxs:
         download_chapter(info, eps[idx])
 
-    input(f"\n{C.GR} Listo. Enter para volver...{C.EN}")
-
-
-def _print_comics_list(comics: list[dict]):
-    for i, c in enumerate(comics):
-        fin = f"{C.GR}✔{C.EN}" if c.get("finished") else f"{C.YE}…{C.EN}"
-        eps = f"{C.BL}{c['eps']:>2}ep{C.EN}"
-        num = f"{C.BO}{i + 1:>2}.{C.EN}"
-        titl = c["title"][:48]
-        cats = f"{C.PU}{','.join(c.get('categories', []))[:22]}{C.EN}"
-        print(f"  {num} {fin} {eps}  {titl:<48}  {cats}")
+    input(f"\n{C.GR} Listo. Enter para volver…{C.EN}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MENÚ 1: DESCARGAR
+#  MENÚ DE RESULTADOS  (paginación + toggle 't' + multiselect)
+# ══════════════════════════════════════════════════════════════════════════════
+def results_menu(comics: list[dict], label: str, paginated: bool = True):
+    PAGE = 20
+    page = 0
+    while True:
+        header()
+        if paginated:
+            start = page * PAGE
+            end = min(start + PAGE, len(comics))
+        else:
+            start, end = 0, len(comics)
+
+        print(f"  {C.PU}'{label}'  ({start + 1}–{end} / {len(comics)}){C.EN}")
+        print(f"  {'━' * 60}")
+        _print_comics_list(comics[start:end], offset=start)
+        print(f"  {'━' * 60}")
+
+        nav = []
+        if paginated and end < len(comics):
+            nav.append(f"{C.CY}n{C.EN}=sig")
+        if paginated and page > 0:
+            nav.append(f"{C.CY}p{C.EN}=ant")
+        nav.append(f"{C.CY}t{C.EN}=toggle pag")
+        nav.append(f"{C.CY}q{C.EN}=volver")
+        print("  " + "  ".join(nav) + "  o número(s)")
+
+        sel = input(f"\n  {C.YE}➜ {C.EN}").strip().lower()
+
+        if sel == "n" and paginated and end < len(comics):
+            page += 1
+        elif sel == "p" and paginated and page > 0:
+            page -= 1
+        elif sel == "t":
+            paginated = not paginated
+            page = 0
+        elif sel == "q":
+            return
+        elif sel.isdigit():
+            idx = int(sel) - 1
+            if 0 <= idx < len(comics):
+                show_comic_and_choose_eps(comics[idx]["id"])
+                input(f"\n  {C.CY}Enter para continuar…{C.EN}")
+        elif "," in sel or (sel and "-" in sel and not sel.startswith("-")):
+            for idx in parse_sel(sel, len(comics)):
+                show_comic_and_choose_eps(comics[idx]["id"])
+            input(f"\n  {C.CY}Enter para continuar…{C.EN}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MENÚ 1: DESCARGAR / BUSCAR
 # ══════════════════════════════════════════════════════════════════════════════
 def menu_download():
     header("🔍  Buscar / Descargar")
-    print(
-        f"  {C.CY}ID{C.EN} (ej. 5d56e4370bcf57397e60576b)  o  {C.CY}nombre{C.EN} del cómic"
-    )
-    print()
-
+    print(f"  {C.CY}ID{C.EN} (24 chars hex)  o  {C.CY}nombre{C.EN} del cómic\n")
     val = input(f"  {C.YE}➜ {C.EN}").strip()
     if not val:
         return
 
-    # Si parece un ObjectId de MongoDB (24 hex chars)
     if re.fullmatch(r"[0-9a-f]{24}", val, re.IGNORECASE):
         show_comic_and_choose_eps(val)
         return
 
-    # Búsqueda por texto
     page = 1
     total_pgs = 1
     sort = "dd"
@@ -683,7 +714,7 @@ def menu_download():
         _print_comics_list(results)
 
         print(
-            f"\n  {C.BL}[n]{C.EN} siguiente  {C.BL}[p]{C.EN} anterior  {C.BL}[s]{C.EN} orden  {C.BL}[q]{C.EN} volver  {C.BL}[1-{len(results)}]{C.EN} descargar"
+            f"\n  {C.BL}[n]{C.EN} sig  {C.BL}[p]{C.EN} ant  {C.BL}[s]{C.EN} orden  {C.BL}[q]{C.EN} volver  número=descargar"
         )
         cmd = input(f"\n  {C.YE}➜ {C.EN}").strip().lower()
 
@@ -694,7 +725,6 @@ def menu_download():
         elif cmd == "p" and page > 1:
             page -= 1
         elif cmd == "s":
-            _choose_sort_inline(sort)
             sort_keys = list(SORT_OPTS.keys())
             print()
             for i, (k, v) in enumerate(SORT_OPTS.items()):
@@ -715,32 +745,23 @@ def menu_download():
                 time.sleep(1)
 
 
-def _choose_sort_inline(current: str):
-    pass  # La lógica está inline arriba
-
-
 # ══════════════════════════════════════════════════════════════════════════════
-#  MENÚ 2: EXPLORAR POR CATEGORÍA
+#  MENÚ 2: EXPLORAR POR CATEGORÍA (una categoría a la vez)
 # ══════════════════════════════════════════════════════════════════════════════
 def menu_browse():
     header("📂  Categorías")
-    print(f"  {C.YE}Cargando...{C.EN}")
-
+    print(f"  {C.YE}Cargando…{C.EN}")
     cats = get_categories()
     if not cats:
         print(f"  {C.RE}No se pudieron cargar las categorías.{C.EN}")
-        input("\n  Enter para volver...")
+        input("\n  Enter para volver…")
         return
 
     header("📂  Categorías")
-    # Grid de 3 columnas, alineado
-    col_w = 22
     cols = 3
     for i, c in enumerate(cats):
-        title = c.get("title", "")
-        entry = f"  {C.BO}{i + 1:>2}.{C.EN} {C.CY}{title}{C.EN}"
+        entry = f"  {C.BO}{i + 1:>2}.{C.EN} {C.CY}{c.get('title', '')}{C.EN}"
         print(entry, end="")
-        # Padding simple: terminamos cada columna con salto
         if (i + 1) % cols == 0:
             print()
     print("\n")
@@ -761,7 +782,7 @@ def menu_browse():
     while True:
         if page not in cache:
             header(f"{cat}")
-            print(f"  {C.YE}Cargando pág {page}...{C.EN}")
+            print(f"  {C.YE}Cargando pág {page}…{C.EN}")
             comics, total_pgs = get_comics_by_category(cat, page=page, sort=sort)
             cache[page] = comics
         else:
@@ -778,7 +799,7 @@ def menu_browse():
             _print_comics_list(comics)
 
         print(
-            f"\n  {C.BL}[n]{C.EN} siguiente  {C.BL}[p]{C.EN} anterior  {C.BL}[s]{C.EN} orden  {C.BL}[q]{C.EN} volver  {C.BL}[1-{len(comics) if comics else 0}]{C.EN} descargar"
+            f"\n  {C.BL}[n]{C.EN} sig  {C.BL}[p]{C.EN} ant  {C.BL}[s]{C.EN} orden  {C.BL}[q]{C.EN} volver  número=descargar"
         )
         cmd = input(f"\n  {C.YE}➜ {C.EN}").strip().lower()
 
@@ -810,63 +831,120 @@ def menu_browse():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  MENÚ 3: CATÁLOGO COMPLETO — endpoint global /comics (135k series)
+# ══════════════════════════════════════════════════════════════════════════════
+def menu_catalog():
+    header("📚  Catálogo completo")
+
+    print(f"  {C.DIM}Catálogo global: ~135,748 series · 6,788 páginas{C.EN}")
+    print(f"  {C.DIM}Con workers=20 tarda ~3-5 min en cargarse todo.{C.EN}\n")
+
+    # Elegir ordenamiento
+    print(f"  {C.BO}Ordenar por:{C.EN}")
+    sort_keys = list(SORT_OPTS.keys())
+    for i, (k, v) in enumerate(SORT_OPTS.items()):
+        print(f"  {C.BO}{i + 1}.{C.EN} {v}")
+    sc = input(f"\n  {C.YE}Número (Enter = Más nuevos) ➜ {C.EN}").strip()
+    sort = "dd"
+    if sc.isdigit():
+        idx = int(sc) - 1
+        if 0 <= idx < len(sort_keys):
+            sort = sort_keys[idx]
+
+    # Opción de carga parcial
+    print(f"\n  {C.BO}¿Cuántas páginas cargar?{C.EN}")
+    print(
+        f"  {C.DIM}Enter = todas (~3-5 min)  |  número = solo N páginas (ej: 100 = 2000 series){C.EN}"
+    )
+    lim_raw = input(f"  {C.YE}➜ {C.EN}").strip()
+    page_limit = int(lim_raw) if lim_raw.isdigit() else None
+
+    print(f"\n  {C.CY}⚡ Cargando catálogo [{SORT_OPTS[sort]}]…{C.EN}")
+    all_comics = fetch_full_catalog(sort=sort, page_limit=page_limit)
+
+    if not all_comics:
+        print(f"  {C.RE}Sin resultados.{C.EN}")
+        input(f"\n  {C.CY}Enter para volver…{C.EN}")
+        return
+
+    # Filtro en memoria
+    filt = (
+        input(f"\n  {C.CY}Filtrar por nombre/categoría/autor (Enter=ver todos): {C.EN}")
+        .strip()
+        .lower()
+    )
+    if filt:
+        all_comics = [
+            c
+            for c in all_comics
+            if filt in c["title"].lower()
+            or any(filt in cat.lower() for cat in c.get("categories", []))
+            or filt in c.get("author", "").lower()
+        ]
+    if not all_comics:
+        print(f"  {C.RE}Sin resultados para '{filt}'.{C.EN}")
+        time.sleep(2)
+        return
+
+    pag_raw = (
+        input(f"  {C.CY}¿Mostrar paginado? [Enter=sí / n=todo] ➜ {C.EN}")
+        .strip()
+        .lower()
+    )
+    paginated = pag_raw != "n"
+    results_menu(all_comics, f"Catálogo · {SORT_OPTS[sort]}", paginated=paginated)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 def _do_login():
     global _token
     header()
     print(f" {C.PU}── Iniciar Sesión ─────────────────────────{C.EN}\n")
-    print(f"  Necesitás una cuenta en la app oficial de PicaComic.\n")
     email = input(f"  {C.YE}Email/usuario ➜ {C.EN}").strip()
     password = getpass(f"  {C.YE}Password ➜ {C.EN}")
-    print(f"\n  {C.YE}⚡ Iniciando sesión...{C.EN}")
+    print(f"\n  {C.YE}⚡ Iniciando sesión…{C.EN}")
     if login(email, password):
         print(f"  {C.GR}✔  Sesión iniciada correctamente.{C.EN}")
         time.sleep(1)
         return True
     else:
         print(f"  {C.RE}✗  Credenciales inválidas o error de red.{C.EN}")
-        input("\n  Enter para volver...")
+        input("\n  Enter para volver…")
         return False
 
 
 def main():
     global _token
 
-    # Avisar si curl_cffi no está disponible
     if not _USE_CURL:
         print(f"\n  {C.YE}⚠  curl_cffi no instalado — el login puede fallar.{C.EN}")
         print(f"  {C.CY}Instalalo con: pip install curl_cffi{C.EN}\n")
         time.sleep(2)
 
-    # Usar token manual si está disponible (saltea el login)
     if MANUAL_TOKEN and not _token:
         _token = MANUAL_TOKEN
         header()
         print(f"\n  {C.GR}✔  Token cargado. Bienvenido.{C.EN}")
         time.sleep(0.6)
-
-    # Fallback: auto-login con credenciales
     elif AUTO_USER and AUTO_PASS and not _token:
         header()
         print(
-            f"\n  {C.YE}⚡ Iniciando sesión como {C.BO}{AUTO_USER}{C.EN}{C.YE}...{C.EN}"
+            f"\n  {C.YE}⚡ Iniciando sesión como {C.BO}{AUTO_USER}{C.EN}{C.YE}…{C.EN}"
         )
         if login(AUTO_USER, AUTO_PASS):
             print(f"  {C.GR}✔  Sesión iniciada.{C.EN}")
             time.sleep(0.8)
         else:
-            print(f"  {C.RE}✗  Auto-login falló. Intentá manualmente.{C.EN}")
+            print(f"  {C.RE}✗  Auto-login falló.{C.EN}")
             time.sleep(1)
 
-    # Si no hay token aún, pedir credenciales
     while not _token:
         header()
         print(f" {C.PU}Menú Principal{C.EN}\n")
-        print(f" Para usar el downloader necesitás iniciar sesión.\n")
         print(f" {C.BO}1.{C.EN} Iniciar sesión")
         print(f" {C.BO}2.{C.EN} Salir\n")
-
         op = input(f"{C.YE} Opción ➜ {C.EN}").strip()
         if op == "1":
             _do_login()
@@ -878,9 +956,11 @@ def main():
         fmt_out = OUTPUT_TYPE.upper()
         fmt_img = USER_FORMAT.upper()
         print(f" {C.BO}1.{C.EN}  Buscar / descargar por ID o nombre")
-        print(f" {C.BO}2.{C.EN}  Explorar catálogo por categoría")
+        print(
+            f" {C.BO}2.{C.EN}  {C.GR}📚 Catálogo completo{C.EN}  {C.DIM}(~135k series, carga paralela){C.EN}"
+        )
         print(f" {C.BO}3.{C.EN}  Salir")
-        print(f"\n  {C.BL}{'─' * 38}{C.EN}")
+        print(f"\n  {C.BL}{'─' * 42}{C.EN}")
         print(
             f"  {C.PU}salida{C.EN} {C.CY}{fmt_out}{C.EN}   "
             f"{C.PU}imagen{C.EN} {C.CY}{fmt_img}{C.EN}   "
@@ -892,7 +972,7 @@ def main():
         if op == "1":
             menu_download()
         elif op == "2":
-            menu_browse()
+            menu_catalog()
         elif op == "3":
             break
 

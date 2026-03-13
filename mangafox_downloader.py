@@ -1,5 +1,5 @@
 """
-FANFOX DOWNLOADER v2.1
+FANFOX DOWNLOADER v2.2
 Sitio: fanfox.net (Mangafox)
 
 Instalación:
@@ -61,9 +61,8 @@ class C:
 
 
 def header() -> None:
-    # _ = os.system("cls" if os.name == "nt" else "clear")
     print(f"{C.BLUE}╔══════════════════════════════════════════╗")
-    print(f"║  {C.BOLD}FANFOX DOWNLOADER v2.1{C.END}{C.BLUE}                   ║")
+    print(f"║  {C.BOLD}FANFOX DOWNLOADER v2.2{C.END}{C.BLUE}                   ║")
     print(f"║  {C.DIM}fanfox.net  ·  Manga & Manhwa{C.END}{C.BLUE}             ║")
     print(f"╚══════════════════════════════════════════╝{C.END}\n")
 
@@ -87,7 +86,7 @@ HEADERS = {
     "q=0.9,image/avif,image/webp,*/*;q=0.8",
 }
 
-SESSION: requests.Session = None
+SESSION: requests.Session = None  # type: ignore
 
 
 def make_session() -> requests.Session:
@@ -103,12 +102,12 @@ def make_session() -> requests.Session:
 def fetch_html(
     url: str, retries: int = 3, referer: Optional[str] = None
 ) -> Optional[str]:
-    headers = {}
+    hdrs = {}
     if referer:
-        headers["Referer"] = referer
+        hdrs["Referer"] = referer
     for attempt in range(retries):
         try:
-            r = SESSION.get(url, timeout=REQUEST_TIMEOUT, headers=headers)
+            r = SESSION.get(url, timeout=REQUEST_TIMEOUT, headers=hdrs)
             if r.status_code == 200:
                 return r.text
             print(f"  {C.YELLOW}HTTP {r.status_code}{C.END} → {url}")
@@ -133,12 +132,7 @@ def search_series(query: str) -> list:
     html = fetch_html(url)
     if not html:
         return []
-    results = _parse_manga_list(html)
-    if not results:
-        soup = _soup(html)
-        links = soup.find_all("a", href=re.compile(r"/manga/"))
-        print(f"  {C.DIM}[debug search] links /manga/ hallados: {len(links)}{C.END}")
-    return results
+    return _parse_manga_list(html)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -186,11 +180,6 @@ def fetch_full_catalog(max_pages: int = 143) -> list:
 
 
 def _parse_manga_list(html: str) -> list:
-    """
-    Parsea listas de manga de /search y /directory.
-    Fanfox usa varias clases de lista; intenta varios selectores.
-    Como fallback extrae todos los links /manga/slug/.
-    """
     soup = _soup(html)
     results = []
     seen_s = set()
@@ -241,7 +230,6 @@ def _parse_manga_list(html: str) -> list:
     if results:
         return results
 
-    # ── Fallback: links /manga/slug/ de la página ──────────────────────────
     _ML = re.compile(r"/manga/([a-z0-9_\-]+)/?$")
     for a in soup.find_all("a", href=_ML):
         href = a.get("href", "")
@@ -262,22 +250,11 @@ def _parse_manga_list(html: str) -> list:
 #  PARSING DE SERIE  —  /manga/{slug}/
 # ══════════════════════════════════════════════════════════════════════════════
 def _clean_chap_title(raw: str, series_title: str) -> str:
-    """
-    El atributo `title` del link puede ser:
-      - "Romance Dawn"              → título real
-      - "One Piece Vol.TBE Ch.1176" → sin título (texto genérico)
-      - ""                           → sin título
-
-    Quita el prefijo del nombre de la serie y luego el prefijo Vol/Ch.
-    Si queda vacío → capítulo sin título.
-    """
     t = raw.strip()
     if not t:
         return ""
-    # Quitar prefijo con nombre de la serie
     if t.lower().startswith(series_title.lower()):
         t = t[len(series_title) :].strip()
-    # Si lo que queda es solo "Vol.X Ch.Y" o "Ch.Y" → sin título real
     if re.match(r"^(?:Vol\.[^\s]+\s+)?Ch\.[^\s]+\s*$", t, re.I):
         return ""
     return t
@@ -310,11 +287,9 @@ def parse_series(slug: str) -> Optional[dict]:
             break
 
     status = ""
-    for sel in [".detail-info-right-title-tip"]:
-        node = soup.select_one(sel)
-        if node:
-            status = node.get_text(strip=True)
-            break
+    node = soup.select_one(".detail-info-right-title-tip")
+    if node:
+        status = node.get_text(strip=True)
 
     genres = [
         a.get_text(strip=True) for a in soup.select(".detail-info-right-tag-list a")
@@ -339,24 +314,17 @@ def parse_series(slug: str) -> Optional[dict]:
         if chap in seen_chaps:
             continue
         seen_chaps.add(chap)
-
         raw_t = (a.get("title") or "").strip()
         chap_title = _clean_chap_title(raw_t, title)
         full_url = BASE_URL + href if href.startswith("/") else href
-
         chapters.append(
-            {
-                "vol": vol,
-                "chap": chap,
-                "title": chap_title,
-                "url": full_url,
-            }
+            {"vol": vol, "chap": chap, "title": chap_title, "url": full_url}
         )
 
     def _key(c):
         try:
             return float(c["chap"])
-        except:
+        except Exception:
             return 0.0
 
     chapters.sort(key=_key, reverse=True)
@@ -374,7 +342,7 @@ def parse_series(slug: str) -> Optional[dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  EXTRACCIÓN DE IMÁGENES POR CAPÍTULO
+#  EXTRACCIÓN DE IMÁGENES
 # ══════════════════════════════════════════════════════════════════════════════
 _RE_CHAPTERID = re.compile(r'chapterid\s*=\s*["\']?(\d+)["\']?', re.I)
 _RE_IMAGECOUNT = re.compile(r'imagecount\s*=\s*["\']?(\d+)["\']?', re.I)
@@ -391,29 +359,22 @@ _RE_IMGURL = re.compile(
 
 
 def _js_vars(html: str) -> tuple:
-    """Extrae (chapterid, imagecount, word) de los <script> de la página."""
     soup = _soup(html)
     js_text = "\n".join(s.get_text() for s in soup.find_all("script"))
-    # También buscar en el HTML crudo por si está fuera de <script>
     combined = js_text + "\n" + html
-
     m_id = _RE_CHAPTERID.search(combined)
     m_cnt = _RE_IMAGECOUNT.search(combined)
     m_w = _RE_WORD.search(combined)
-
     chid = m_id.group(1) if m_id else None
     cnt = int(m_cnt.group(1)) if m_cnt else 0
     word = (m_w.group(1) or m_w.group(2)) if m_w else None
-
     return chid, cnt, word
 
 
 def _api_images(slug: str, chapter_id: str, n_pages: int, word: Optional[str]) -> list:
-    """API interna de fanfox para URLs de imagen."""
     images = []
     api_base = f"{BASE_URL}/roll_manga/apiv1/manga/{slug}/chapters/{chapter_id}/images/"
     token = word or SESSION.cookies.get("word", "")
-
     for page in range(1, n_pages + 1):
         params: dict = {"page": page}
         if token:
@@ -447,19 +408,14 @@ def _api_images(slug: str, chapter_id: str, n_pages: int, word: Optional[str]) -
                         images.append(u if u.startswith("http") else "https:" + u)
         except Exception:
             break
-
     return images
 
 
 def _page_image(page_url: str, referer: str) -> Optional[str]:
-    """Extrae URL de imagen de una página del lector."""
     html = fetch_html(page_url, referer=referer)
     if not html:
         return None
-
     soup = _soup(html)
-
-    # Selector directo del lector fanfox
     for sel in [
         "img#image",
         "img.reader-main-img",
@@ -473,31 +429,19 @@ def _page_image(page_url: str, referer: str) -> Optional[str]:
                 src = img.get(attr, "")
                 if src and any(x in src for x in ("fmcdn", "mfcdn")):
                     return src if src.startswith("http") else "https:" + src
-
-    # Regex en el HTML completo
     for m in _RE_IMGURL.finditer(html):
         src = m.group(1)
         if "/logo" not in src and "/icon" not in src:
             return src
-
     return None
 
 
 def extract_chapter_images(chap_url: str, slug: str) -> list:
-    """
-    Triple estrategia:
-    1. Leer JS (chapterid, imagecount) → API interna
-    2. Si API falla o incompleta → scraping página a página
-    3. Si imagecount=0 → barrer hasta ~60 páginas
-    """
     base_chap = re.sub(r"/\d+\.html$", "", chap_url)
     html = fetch_html(chap_url, referer=BASE_URL)
     if not html:
         return []
-
     chapter_id, n_pages, word = _js_vars(html)
-
-    # Contar páginas desde links de paginación si imagecount=0
     if n_pages == 0:
         soup = _soup(html)
         nums = set()
@@ -507,30 +451,22 @@ def extract_chapter_images(chap_url: str, slug: str) -> list:
                 nums.add(int(m.group(1)))
         if nums:
             n_pages = max(nums)
-
     print(
-        f"\n    {C.DIM}chapterid={chapter_id}  "
-        f"imagecount={n_pages}  "
+        f"\n    {C.DIM}chapterid={chapter_id}  imagecount={n_pages}  "
         f"word={'✓' if word else '✗'}{C.END}",
         end="",
         flush=True,
     )
-
-    # Estrategia 1: API
     if chapter_id and n_pages > 0:
         images = _api_images(slug, chapter_id, n_pages, word)
         if len(images) == n_pages:
             return images
         if images:
             print(
-                f"\n    {C.DIM}API: {len(images)}/{n_pages}, "
-                f"completando con scraping…{C.END}",
+                f"\n    {C.DIM}API: {len(images)}/{n_pages}, completando con scraping…{C.END}",
                 end="",
             )
-
-    # Estrategia 2: scraping página a página
     max_scan = n_pages if n_pages > 0 else 60
-
     imgs_by_page: dict = {}
     with ThreadPoolExecutor(max_workers=4) as exe:
         futures = {
@@ -542,7 +478,6 @@ def extract_chapter_images(chap_url: str, slug: str) -> list:
             img = fut.result()
             if img:
                 imgs_by_page[p] = img
-
     return [imgs_by_page[p] for p in sorted(imgs_by_page)]
 
 
@@ -679,7 +614,6 @@ def download_series(slug: str) -> None:
             label = c["title"] if c["title"] else f"{C.DIM}(sin título){C.END}"
             print(f"  {C.BOLD}{i + 1:4d}.{C.END} {vol_s}Ch.{c['chap']}  {label[:55]}")
         print(f"  {C.PURPLE}{'─' * 60}{C.END}")
-
         nav = ""
         if end_idx < len(chapters):
             nav += f"  {C.CYAN}n{C.END}=siguiente  "
@@ -687,11 +621,9 @@ def download_series(slug: str) -> None:
             nav += f"  {C.CYAN}p{C.END}=anterior"
         if nav:
             print(nav)
-
         raw = input(
             f"\n  {C.YELLOW}Caps a bajar ('1', '3-5,9', 'all') ➜ {C.END}"
         ).strip()
-
         if raw.lower() == "n" and end_idx < len(chapters):
             show_off += PAGE
         elif raw.lower() == "p" and show_off > 0:
@@ -790,40 +722,54 @@ def download_series(slug: str) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MENÚ DE RESULTADOS
+#  MENÚ DE RESULTADOS  (con toggle paginación)
 # ══════════════════════════════════════════════════════════════════════════════
-def results_menu(results: list, label: str) -> None:
+def results_menu(results: list, label: str, paginated: bool = True) -> None:
     page = 0
     PAGE = MAX_RESULTS
     while True:
         header()
-        start = page * PAGE
-        end = min(start + PAGE, len(results))
+        if paginated:
+            start = page * PAGE
+            end = min(start + PAGE, len(results))
+            chunk = results[start:end]
+        else:
+            start = 0
+            end = len(results)
+            chunk = results
+
         print(f"  {C.PURPLE}'{label}'  ({start + 1}–{end} de {len(results)}){C.END}")
         print(f"  {'━' * 60}")
-        for i, r in enumerate(results[start:end]):
+        for i, r in enumerate(chunk):
             num = start + i + 1
             rating = f"  ★{r['rating']}" if r.get("rating") else ""
             status = f"  [{r['status']}]" if r.get("status") else ""
             print(
-                f"  {C.BOLD}{num:3d}.{C.END} {r['title'][:48]}"
-                f"{C.DIM}{status}{rating}{C.END}"
+                f"  {C.BOLD}{num:3d}.{C.END} {r['title'][:48]}{C.DIM}{status}{rating}{C.END}"
             )
             print(f"       {C.CYAN}{r['slug']}{C.END}")
         print(f"  {'━' * 60}")
+
         nav = []
-        if end < len(results):
+        if paginated and end < len(results):
             nav.append(f"{C.CYAN}n{C.END}=siguiente")
-        if page > 0:
+        if paginated and page > 0:
             nav.append(f"{C.CYAN}p{C.END}=anterior")
+        if paginated:
+            nav.append(f"{C.CYAN}t{C.END}=ver todo sin paginación")
+        else:
+            nav.append(f"{C.CYAN}t{C.END}=volver a paginado")
         nav.append(f"{C.CYAN}q{C.END}=volver")
         print("  " + "  ".join(nav) + "  o número para descargar")
 
         sel = input(f"\n  {C.YELLOW}Acción ➜ {C.END}").strip().lower()
-        if sel == "n" and end < len(results):
+        if sel == "n" and paginated and end < len(results):
             page += 1
-        elif sel == "p" and page > 0:
+        elif sel == "p" and paginated and page > 0:
             page -= 1
+        elif sel == "t":
+            paginated = not paginated
+            page = 0
         elif sel == "q":
             break
         elif sel.isdigit():
@@ -832,11 +778,26 @@ def results_menu(results: list, label: str) -> None:
                 download_series(results[idx]["slug"])
                 input(f"\n  {C.GREEN}Enter para continuar…{C.END}")
                 break
+        elif "," in sel or "-" in sel:
+            idxs = _parse_positions(sel, len(results))
+            if idxs:
+                for idx in idxs:
+                    download_series(results[idx]["slug"])
+                input(f"\n  {C.GREEN}Cola terminada. Enter…{C.END}")
+                break
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  MENÚ PRINCIPAL
 # ══════════════════════════════════════════════════════════════════════════════
+def _slug_from_input(raw: str) -> str:
+    """Extrae el slug de una URL fanfox o lo devuelve tal cual."""
+    m = re.search(r"fanfox\.net/manga/([^/?#\s]+)", raw)
+    if m:
+        return m.group(1).strip("/")
+    return raw.strip().strip("/")
+
+
 def main() -> None:
     global SESSION
     SESSION = make_session()
@@ -844,62 +805,79 @@ def main() -> None:
     while True:
         header()
         print(f"  {C.PURPLE}{C.BOLD}Menú Principal{C.END}")
+        print(f"  ├─ {C.BOLD}1.{C.END} Buscar / descargar por nombre, slug o URL")
+        print(f"  ├─ {C.BOLD}2.{C.END} 📂  Ver catálogo completo")
+        print(f"  └─ {C.BOLD}3.{C.END} Salir")
         print(
-            f"  ├─ {C.BOLD}1.{C.END} Descargar por slug  (ej: {C.DIM}one_piece{C.END})"
-        )
-        print(f"  ├─ {C.BOLD}2.{C.END} Buscar por nombre")
-        print(f"  ├─ {C.BOLD}3.{C.END} Ver catálogo completo  {C.DIM}(~143 pág){C.END}")
-        print(f"  └─ {C.BOLD}4.{C.END} Salir")
-        print(
-            f"\n  {C.PURPLE}Config:{C.END}  "
-            f"salida={C.CYAN}{OUTPUT_TYPE.upper()}{C.END}  "
-            f"imagen={C.CYAN}{USER_FORMAT.upper()}{C.END}"
+            f"\n  {C.PURPLE}Config:{C.END}  salida={C.CYAN}{OUTPUT_TYPE.upper()}{C.END}  imagen={C.CYAN}{USER_FORMAT.upper()}{C.END}"
         )
 
         op = input(f"\n  {C.YELLOW}Opción ➜ {C.END}").strip()
 
         if op == "1":
-            slug = input(f"  {C.CYAN}Slug (ej: one_piece): {C.END}").strip()
-            if slug:
-                download_series(slug)
-                input(f"\n  {C.CYAN}Enter para continuar…{C.END}")
-
-        elif op == "2":
-            query = input(f"  {C.CYAN}Buscar: {C.END}").strip()
-            if not query:
+            raw = input(f"  {C.CYAN}Nombre, slug o URL: {C.END}").strip()
+            if not raw:
                 continue
-            print(f"  {C.CYAN}[*] Buscando '{query}'…{C.END}")
-            results = search_series(query)
+            # Si parece un slug/URL directo (sin espacios) intentar buscar primero
+            if " " not in raw and "fanfox.net" not in raw:
+                # Podría ser slug directo — buscar igualmente y si hay resultado exacto usar ese
+                results = search_series(raw)
+                exact = [r for r in results if r["slug"].lower() == raw.lower()]
+                if exact:
+                    download_series(exact[0]["slug"])
+                    input(f"\n  {C.CYAN}Enter para continuar…{C.END}")
+                    continue
+                elif results:
+                    results_menu(results, raw)
+                    continue
+                else:
+                    # Tratar como slug directo
+                    download_series(_slug_from_input(raw))
+                    input(f"\n  {C.CYAN}Enter para continuar…{C.END}")
+                    continue
+            # URL completa
+            if "fanfox.net" in raw:
+                download_series(_slug_from_input(raw))
+                input(f"\n  {C.CYAN}Enter para continuar…{C.END}")
+                continue
+            # Nombre con espacios → búsqueda
+            print(f"  {C.CYAN}[*] Buscando '{raw}'…{C.END}")
+            results = search_series(raw)
             if not results:
-                print(f"  {C.RED}Sin resultados para '{query}'.{C.END}")
+                print(f"  {C.RED}Sin resultados para '{raw}'.{C.END}")
                 time.sleep(2)
             else:
-                results_menu(results, query)
+                results_menu(results, raw)
 
-        elif op == "3":
+        elif op == "2":
             print(f"\n  {C.CYAN}[*] Cargando catálogo completo…{C.END}")
             results = fetch_full_catalog()
             if not results:
-                print(f"\n  {C.RED}No se pudo cargar el catálogo.")
-                print(f"  {C.DIM}Probablemente el directorio usa JS para renderizar.")
-                print(f"  Prueba opción 2 para buscar por nombre.{C.END}")
+                print(f"\n  {C.RED}No se pudo cargar el catálogo.{C.END}")
                 time.sleep(3)
                 continue
             print(f"\n  {C.GREEN}✓ {len(results)} series cargadas.{C.END}")
-            query = (
+            ft = (
                 input(f"  {C.CYAN}Filtrar por nombre (Enter=ver todas): {C.END}")
                 .strip()
                 .lower()
             )
-            if query:
+            if ft:
                 results = [
                     r
                     for r in results
-                    if query in r["title"].lower() or query in r["slug"].lower()
+                    if ft in r["title"].lower() or ft in r["slug"].lower()
                 ]
-            results_menu(results, "catálogo" if not query else query)
+            modo = (
+                input(
+                    f"  {C.CYAN}¿Con paginación? (Enter=sí / n=todo de una vez): {C.END}"
+                )
+                .strip()
+                .lower()
+            )
+            results_menu(results, "catálogo" if not ft else ft, paginated=(modo != "n"))
 
-        elif op == "4":
+        elif op == "3":
             print(f"\n  {C.GREEN}¡Hasta luego!{C.END}\n")
             break
 

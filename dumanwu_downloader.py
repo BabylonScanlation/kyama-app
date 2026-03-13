@@ -16,9 +16,10 @@ import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
-from typing import Protocol, runtime_checkable, TypedDict, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, TypedDict, cast, runtime_checkable
 
 if TYPE_CHECKING:
+
     class ScraplingNode(Protocol):
         @property
         def text(self) -> str: ...
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     class AdaptorType(Protocol):
         def __call__(self, html: str, url: str = ...) -> ScraplingNode: ...
 
+
 import requests
 
 
@@ -39,6 +41,7 @@ class ChapterDict(TypedDict):
     title: str
     url: str
     html: str | None
+
 
 @runtime_checkable
 class ElementProtocol(Protocol):
@@ -51,22 +54,22 @@ class ElementProtocol(Protocol):
 
 
 # ─── SCRAPLING UNIVERSAL ───────────────────────────────────────────────────────
-# Compatible con cualquier versión instalada
 try:
     try:
-        import scrapling as _scrapling1 # type: ignore
+        import scrapling as _scrapling1  # type: ignore
+
         _Adaptor = cast("AdaptorType", getattr(_scrapling1, "Selector"))
     except ImportError:
         try:
-            import scrapling.parser as _scrapling2 # type: ignore
+            import scrapling.parser as _scrapling2  # type: ignore
+
             _Adaptor = cast("AdaptorType", getattr(_scrapling2, "Adaptor"))
         except ImportError:
-            import scrapling as _scrapling3 # type: ignore
+            import scrapling as _scrapling3  # type: ignore
+
             _Adaptor = cast("AdaptorType", getattr(_scrapling3, "Adaptor"))
 
     class ScraplingElem:
-        """Wrapper sobre elemento Scrapling con API uniforme."""
-
         def __init__(self, node: object) -> None:
             self._n: object = node
 
@@ -85,7 +88,6 @@ try:
             try:
                 a = getattr(self._n, "attrib", {})
                 if isinstance(a, dict):
-                    # Use cast to object to avoid Any warnings during dict iteration
                     a_dict = cast("dict[object, object]", a)
                     return {str(k): str(v) for k, v in a_dict.items()}
                 return {}
@@ -108,7 +110,6 @@ try:
                 if callable(css_first_func):
                     r = cast("object | None", css_first_func(sel))
                     return ScraplingElem(r) if r is not None else None
-                
                 css_func = getattr(self._n, "css", None)
                 if callable(css_func):
                     results = cast("list[object]", css_func(sel))
@@ -171,7 +172,6 @@ except (ImportError, Exception):
             try:
                 attrs = getattr(self._n, "attrs", {})
                 if isinstance(attrs, dict):
-                    # Use cast to object to avoid Any warnings during dict iteration
                     attrs_dict = cast("dict[object, object]", attrs)
                     return {str(k): str(v) for k, v in attrs_dict.items()}
                 return {}
@@ -228,6 +228,7 @@ except (ImportError, Exception):
 
     Selector = BS4Selector
     parser_name = "bs4"
+
 try:
     from PIL import Image
 
@@ -239,7 +240,7 @@ except ImportError:
 # ─── CONFIGURACIÓN ─────────────────────────────────────────────────────────────
 BASE_URL = "https://dumanwu.com"
 OUTPUT_TYPE = "zip"
-USER_FORMAT = "webp"  # 'original' | 'jpg' | 'png' | 'webp'
+USER_FORMAT = "webp"
 MAX_WORKERS_DL = 50
 DELETE_TEMP = True
 MIN_IMAGE_SIZE_KB = 5
@@ -265,7 +266,6 @@ _UI_PATHS = (
     "favicon.ico",
 )
 
-# Semillas XOR — se rellenan automáticamente al iniciar (ver _load_seeds)
 _seeds_cache: list[bytes] = []
 
 
@@ -296,14 +296,15 @@ class UI:
 
 
 SESSION = requests.Session()
-adapter = requests.adapters.HTTPAdapter(pool_connections=MAX_WORKERS_DL, pool_maxsize=MAX_WORKERS_DL)
+adapter = requests.adapters.HTTPAdapter(
+    pool_connections=MAX_WORKERS_DL, pool_maxsize=MAX_WORKERS_DL
+)
 SESSION.mount("http://", adapter)
 SESSION.mount("https://", adapter)
 SESSION.headers.update(HEADERS)
 
 
-# ─── AUTO-EXTRACCIÓN DE SEMILLAS XOR DESDE all2.js ────────────────────────────
-# Semillas de respaldo (hardcoded) en caso de que el fetch falle
+# ─── SEMILLAS XOR ─────────────────────────────────────────────────────────────
 _SEEDS_FALLBACK_HEX = [
     "736d6b6879323538",
     "736d6b6439356676",
@@ -319,26 +320,14 @@ _SEEDS_FALLBACK_HEX = [
 
 
 def _load_seeds() -> list[bytes]:
-    """
-    Descarga all2.js y extrae las semillas XOR automáticamente.
-    Busca patrones como:
-      ["736d6b6879323538", "736d6b6439356676", ...]
-      var seeds = [...]
-      xorKey = "736d6b6879323538"
-    Si falla, usa las semillas hardcoded de respaldo.
-    """
     global _seeds_cache
-
-    # Intentar obtener la URL exacta del JS (puede cambiar el ?v=)
     js_urls = []
     try:
         r = SESSION.get(f"{BASE_URL}/", timeout=8)
-        # Buscar la URL de all2.js en el HTML del home
         matches = re.findall(r'src="(/static/js/all2\.js[^"]*)"', r.text)
         if matches:
             js_urls = [BASE_URL + matches[0]]
         else:
-            # Probar versiones conocidas
             js_urls = [
                 f"{BASE_URL}/static/js/all2.js?v=2.3",
                 f"{BASE_URL}/static/js/all2.js",
@@ -351,43 +340,40 @@ def _load_seeds() -> list[bytes]:
             r = SESSION.get(js_url, timeout=10, headers={**HEADERS, "Accept": "*/*"})
             if r.status_code != 200 or len(r.content) < 100:
                 continue
-
             js_text = r.text
-
-            # Patrón 1: array de strings hex ["736d6b...", "736d6b..."]
             m = re.search(
                 r'\[\s*"([0-9a-fA-F]{6,})"(?:\s*,\s*"([0-9a-fA-F]{6,})")+\s*\]', js_text
             )
             if m:
-                all_hex = cast("list[str]", re.findall(r'"([0-9a-fA-F]{8,})"', m.group(0)))
+                all_hex = cast(
+                    "list[str]", re.findall(r'"([0-9a-fA-F]{8,})"', m.group(0))
+                )
                 if len(all_hex) >= 3:
-                    extracted_seeds: list[bytes] = []
+                    extracted: list[bytes] = []
                     for h in all_hex:
                         try:
-                            extracted_seeds.append(bytes.fromhex(h))
+                            extracted.append(bytes.fromhex(h))
                         except Exception:
                             pass
-                    if extracted_seeds:
-                        _seeds_cache = extracted_seeds
-                        return extracted_seeds
-
-            # Patrón 2: strings hex sueltos adyacentes (≥6 de ellos)
-            all_hex = cast("list[str]", re.findall(r'["\']([0-9a-fA-F]{8,})["\']', js_text))
-            if len(all_hex) >= 5:
-                extracted_seeds2: list[bytes] = []
-                for h in all_hex:
+                    if extracted:
+                        _seeds_cache = extracted
+                        return extracted
+            all_hex2 = cast(
+                "list[str]", re.findall(r'["\']([0-9a-fA-F]{8,})["\']', js_text)
+            )
+            if len(all_hex2) >= 5:
+                extracted2: list[bytes] = []
+                for h in all_hex2:
                     try:
-                        extracted_seeds2.append(bytes.fromhex(h))
+                        extracted2.append(bytes.fromhex(h))
                     except Exception:
                         pass
-                if len(extracted_seeds2) >= 5:
-                    _seeds_cache = extracted_seeds2
-                    return extracted_seeds2
-
+                if len(extracted2) >= 5:
+                    _seeds_cache = extracted2
+                    return extracted2
         except Exception:
             continue
 
-    # Fallback a semillas hardcoded
     seeds: list[bytes] = []
     for h in _SEEDS_FALLBACK_HEX:
         try:
@@ -398,7 +384,7 @@ def _load_seeds() -> list[bytes]:
     return seeds
 
 
-# ─── DECODIFICADOR PACKER + XOR ───────────────────────────────────────────────
+# ─── DECODIFICADOR ────────────────────────────────────────────────────────────
 _B62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
@@ -424,15 +410,14 @@ def _decode_packer(p: str, base: int, k_str: str) -> str:
 
 
 def _extract_packer_args(script: str) -> tuple[str, int, int, str] | None:
-    """Extrae (p, base, count, keys) del script packer."""
     try:
         start = script.rindex("}(") + 2
         args = script[start:]
-        parts = cast("list[tuple[str, str]]", re.findall(r"'((?:[^'\\]|\\.)*)'|(\d+)", args))
+        parts = cast(
+            "list[tuple[str, str]]", re.findall(r"'((?:[^'\\]|\\.)*)'|(\d+)", args)
+        )
         vals: list[int | str] = [int(n) if n else s for s, n in parts]
         if len(vals) >= 4:
-            # We use cast(Any, ...) here to avoid complex union type issues with int() and str()
-            # but we know they are either int or str from the list definition
             return str(vals[0]), int(vals[1]), int(vals[2]), str(vals[3])
     except (ValueError, IndexError):
         pass
@@ -444,39 +429,30 @@ def _xor_decrypt(data: bytes, key: bytes) -> bytes:
 
 
 def _decrypt_images(html: str) -> list[str]:
-    """
-    Pipeline: HTML → packer → decode → base64 → XOR(seed) → base64 → JSON/URLs
-    """
     seeds = _seeds_cache or _load_seeds()
-
-    scripts = cast("list[str]", re.findall(
-        r"<script[^>]*>(.*?)</script>", html, re.DOTALL | re.IGNORECASE
-    ))
+    scripts = cast(
+        "list[str]",
+        re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL | re.IGNORECASE),
+    )
     for script in scripts:
         if "eval(function(p,a,c,k,e,d)" not in script:
             continue
-
         args = _extract_packer_args(script)
         if not args:
             continue
-
         p, base, _count, k = args
         decoded = _decode_packer(p, base, k)
-
-        # Buscar la variable con el string largo (comilla simple o doble)
         m = re.search(
             r"""var\s+\w+\s*=\s*['"]([A-Za-z0-9+/]{40,}={0,2})['"]""", decoded
         )
         if not m:
             continue
-
         match_val = m.group(1)
         try:
             pad = (4 - len(match_val) % 4) % 4
             raw = base64.b64decode(match_val + "=" * pad)
         except Exception:
             continue
-
         for seed in seeds:
             try:
                 xored = _xor_decrypt(raw, seed)
@@ -486,8 +462,6 @@ def _decrypt_images(html: str) -> list[str]:
                 )
                 if "http" not in final:
                     continue
-
-                # Intentar JSON primero
                 try:
                     data_json = cast(object, json.loads(final))
                     if isinstance(data_json, list):
@@ -497,32 +471,243 @@ def _decrypt_images(html: str) -> list[str]:
                             return urls
                 except (json.JSONDecodeError, ValueError):
                     pass
-
-                # Fallback regex
-                raw_urls = cast("list[str]", re.findall(r"https?://[^\s\"',\[\]]+", final))
-                urls = [
+                raw_urls = cast(
+                    "list[str]", re.findall(r"https?://[^\s\"',\[\]]+", final)
+                )
+                urls2 = [
                     u
                     for u in raw_urls
                     if any(e in u.lower() for e in [".jpg", ".jpeg", ".png", ".webp"])
                     or any(cdn in u for cdn in ["ecombdimg", "shimolife", "tplv"])
                 ]
-                if urls:
-                    return urls
-
+                if urls2:
+                    return urls2
             except Exception:
                 continue
-
     return []
 
 
-# ─── HELPER: número de capítulo para ordenar ──────────────────────────────────
+# ─── CAPÍTULOS ────────────────────────────────────────────────────────────────
 def _cap_sort_key(cap: ChapterDict) -> float:
-    """Extrae el número del título para ordenar. Sin número → 0 (va primero)."""
     m = re.search(r"(\d+(?:\.\d+)?)", cap.get("title", ""))
     return float(m.group(1)) if m else 0.0
 
 
-# ─── LÓGICA PRINCIPAL ─────────────────────────────────────────────────────────
+# ─── CATÁLOGO ────────────────────────────────────────────────────────────────
+class CatalogItem(TypedDict):
+    slug: str
+    title: str
+    latest: str
+
+
+# Categorías del sitio
+_DW_SORTS = {
+    1: "冒险",
+    2: "热血",
+    3: "都市",
+    4: "玄幻",
+    5: "悬疑",
+    6: "耽美",
+    7: "恋爱",
+    8: "生活",
+    9: "搞笑",
+    10: "穿越",
+    11: "修真",
+    12: "后宫",
+    13: "女主",
+    14: "古风",
+    15: "连载",
+    16: "完结",
+}
+_DW_RANKS = {
+    1: "精品榜",
+    2: "人气榜",
+    3: "推荐榜",
+    4: "黑马榜",
+    5: "最近更新",
+    6: "新漫画",
+}
+
+_SYSTEM_SLUGS = {
+    "static",
+    "s",
+    "list",
+    "tag",
+    "type",
+    "update",
+    "rank",
+    "new",
+    "morechapter",
+    "sort",
+    "user",
+    "track",
+    "sortmore",
+    "rankmore",
+}
+
+
+def _parse_series_html(html: str) -> list[CatalogItem]:
+    """
+    Extrae series del HTML crudo de /sort/N o /rank/N.
+    Busca pares (slug, h2-título) en bloques <a href=".../SLUG/">...<h2>TÍTULO</h2>.
+    """
+    items: list[CatalogItem] = []
+    seen: set[str] = set()
+
+    # Estrategia 1: bloque <a href="/SLUG/">...<h2>título</h2>
+    for m in re.finditer(
+        r'<a\s[^>]*href="(?:https?://dumanwu\.com)?/([A-Za-z0-9]{5,10})/"[^>]*>'
+        r"([\s\S]{0,400}?)</a>",
+        html,
+    ):
+        slug = m.group(1)
+        inner = m.group(2)
+        if slug in _SYSTEM_SLUGS or slug in seen:
+            continue
+        # Buscar h2 dentro del bloque
+        h2 = re.search(r"<h2[^>]*>([^<]{1,100})</h2>", inner)
+        if not h2:
+            continue
+        title = re.sub(r"<[^>]+>", "", h2.group(1)).strip()
+        if not title:
+            continue
+        seen.add(slug)
+        items.append({"slug": slug, "title": title, "latest": ""})
+
+    # Estrategia 2: si no hay h2, extraer slugs únicos alfanuméricos de 7 chars
+    if not items:
+        for m in re.finditer(
+            r'href="(?:https?://dumanwu\.com)?/([A-Za-z0-9]{7})/"', html
+        ):
+            slug = m.group(1)
+            if slug in _SYSTEM_SLUGS or slug in seen:
+                continue
+            seen.add(slug)
+            items.append({"slug": slug, "title": slug, "latest": ""})
+
+    return items
+
+
+def _sortmore(type_id: int, page: int) -> list[CatalogItem]:
+    """
+    POST /sortmore  — endpoint AJAX del botón 'cargar más' en /sort/N.
+    Devuelve lista de series o [] si no hay más / endpoint no existe.
+    """
+    try:
+        r = SESSION.post(
+            f"{BASE_URL}/sortmore",
+            data={"type": type_id, "page": page},
+            headers={**HEADERS, "X-Requested-With": "XMLHttpRequest"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return []
+        # Puede responder JSON o HTML fragmentado
+        ct = r.headers.get("Content-Type", "")
+        if "json" in ct:
+            try:
+                data = cast("dict[str, object]", r.json())
+                if str(data.get("code", "")) == "200" and isinstance(
+                    data.get("data"), list
+                ):
+                    rows = cast("list[dict[str, object]]", data["data"])
+                    return [
+                        {
+                            "slug": str(row.get("id", "")),
+                            "title": str(row.get("name", "")),
+                            "latest": "",
+                        }
+                        for row in rows
+                        if row.get("id")
+                    ]
+            except Exception:
+                pass
+        # HTML fragmentado (lo más común)
+        if len(r.content) < 50:
+            return []
+        return _parse_series_html(r.text)
+    except Exception:
+        return []
+
+
+def _load_sort(sort_id: int, sort_name: str) -> list[CatalogItem]:
+    """
+    Carga TODAS las series de /sort/{sort_id} usando:
+    1. GET /sort/{sort_id}  (primera página, 20 items)
+    2. POST /sortmore {type, page}  (páginas adicionales hasta vacío)
+    """
+    all_items: list[CatalogItem] = []
+    seen: set[str] = set()
+
+    # Página inicial
+    try:
+        r = SESSION.get(f"{BASE_URL}/sort/{sort_id}", timeout=15, headers=HEADERS)
+        if r.status_code == 200:
+            for it in _parse_series_html(r.text):
+                if it["slug"] not in seen:
+                    seen.add(it["slug"])
+                    all_items.append(it)
+    except Exception:
+        pass
+
+    # Cargar más vía AJAX
+    page = 2
+    consecutive_empty = 0
+    while page <= 500:
+        more = _sortmore(sort_id, page)
+        if not more:
+            consecutive_empty += 1
+            if consecutive_empty >= 3:
+                break
+            page += 1
+            continue
+        consecutive_empty = 0
+        added = 0
+        for it in more:
+            if it["slug"] not in seen:
+                seen.add(it["slug"])
+                all_items.append(it)
+                added += 1
+        if added == 0:
+            break  # ya no hay nuevas
+        page += 1
+        time.sleep(0.1)
+
+    return all_items
+
+
+def load_full_catalog(workers: int = 8) -> list[CatalogItem]:
+    """
+    Carga TODAS las series iterando /sort/1..16 con paginación AJAX.
+    """
+    all_items: list[CatalogItem] = []
+    seen: set[str] = set()
+
+    for sort_id, sort_name in _DW_SORTS.items():
+        sys.stdout.write(
+            f"  {UI.CYAN}[{sort_id}/{len(_DW_SORTS)}] {sort_name}...{UI.END}   \r"
+        )
+        sys.stdout.flush()
+
+        items = _load_sort(sort_id, sort_name)
+        added = 0
+        for it in items:
+            if it["slug"] not in seen:
+                seen.add(it["slug"])
+                all_items.append(it)
+                added += 1
+
+        sys.stdout.write(
+            f"  {UI.CYAN}[{sort_id}/{len(_DW_SORTS)}] {sort_name}"
+            f" — {added} nuevas — {len(all_items)} total{UI.END}   \r"
+        )
+        sys.stdout.flush()
+        time.sleep(0.2)
+
+    print(f"\n  {UI.GREEN}✔ {len(all_items)} series cargadas{UI.END}   ")
+    return all_items
+
+
 class DumanwuLogic:
     def parse_series_page(self, slug: str) -> tuple[str, str, str, list[ChapterDict]]:
         url = f"{BASE_URL}/{slug}/"
@@ -533,7 +718,6 @@ class DumanwuLogic:
 
         sel = Selector(r.text, url=url)
         h1 = sel.css_first("h1")
-        # Fallback a regex si Scrapling no parsea el h1
         title = (
             (h1.text if h1 and h1.text else "")
             or (re.search(r"<h1[^>]*>([^<]+)</h1>", r.text) or ["", ""])[1].strip()
@@ -560,7 +744,6 @@ class DumanwuLogic:
         caps: list[ChapterDict] = []
         seen: set[str] = set()
 
-        # Capítulos visibles en el HTML — usar regex directo (más fiable que Scrapling .text)
         for m2 in re.finditer(
             rf'href="(/{slug_esc}/([A-Za-z0-9]+)\.html)"[^>]*>([^<]*)</a>', r.text
         ):
@@ -582,12 +765,10 @@ class DumanwuLogic:
                     }
                 )
 
-        # 2. API /morechapter para obtener el resto de capítulos instantáneamente
         try:
             r2 = SESSION.post(f"{BASE_URL}/morechapter", data={"id": slug}, timeout=10)
             if r2.status_code == 200:
                 data = cast("dict[str, object]", r2.json())
-                # code puede ser int o string "200"
                 if str(data.get("code", "")) == "200" and "data" in data:
                     data_items = cast("list[object]", data["data"])
                     for item in data_items:
@@ -609,17 +790,12 @@ class DumanwuLogic:
         except Exception:
             pass
 
-        # ── ORDENAR por número de capítulo (fix bug reverse()) ────────────────
-        # sort() es estable: caps sin número (预告, etc.) quedan primero (key=0)
         caps.sort(key=_cap_sort_key)
-
         print(f"\r  {UI.GREEN}[OK] {len(caps)} capítulos.{' ' * 20}{UI.END}")
         return title, autor, sinopsis, caps
 
     def extract_images(self, cap: ChapterDict) -> list[str]:
         html = cap.get("html")
-
-        # Obtener HTML si no está en caché o no tiene el packer
         if not html or "eval(function(p,a,c,k,e,d)" not in str(html):
             cap_url = cap["url"]
             series_slug = cap_url.split("/")[-2]
@@ -634,7 +810,6 @@ class DumanwuLogic:
                         html = r.text
                         if "eval(function(p,a,c,k,e,d)" in html:
                             break
-                        # Packer no encontrado — esperar y reintentar
                         time.sleep(1.5)
                     else:
                         time.sleep(attempt + 1)
@@ -645,14 +820,6 @@ class DumanwuLogic:
             print(f"\n{UI.RED}[!] No se pudo obtener el HTML del capítulo.{UI.END}")
             return []
 
-        if "eval(function(p,a,c,k,e,d)" not in html:
-            print(
-                f"\n{UI.YELLOW}[!] Packer no encontrado en el HTML " +
-                f"(posible bloqueo o capítulo vacío).{UI.END}"
-            )
-            # Aún intentar fallback data-src
-
-        # 1. Decrypt pipeline (método principal)
         urls = _decrypt_images(html)
         if urls:
             content_urls = [
@@ -662,14 +829,9 @@ class DumanwuLogic:
             ]
             if content_urls:
                 return content_urls
-            print(
-                f"\n{UI.YELLOW}[!] Decrypt OK pero URLs parecen portadas " +
-                f"({len(urls)} filtradas). Posible rotación de semillas.{UI.END}"
-            )
 
-        # 2. Fallback: regex data-src en el HTML
         fallback: list[str] = []
-        seen: set[str] = set()
+        seen_fb: set[str] = set()
         for pattern in [
             r'data-src="(https?://[^"]+)"',
             r'data-original="(https?://[^"]+)"',
@@ -677,13 +839,12 @@ class DumanwuLogic:
             for m in re.finditer(pattern, html):
                 src = m.group(1)
                 if (
-                    src not in seen
+                    src not in seen_fb
                     and not any(p in src.lower() for p in _UI_PATHS)
                     and "scl3phc04j" not in src
                 ):
-                    seen.add(src)
+                    seen_fb.add(src)
                     fallback.append(src)
-
         return fallback
 
     def search(self, query: str) -> list[dict[str, str]]:
@@ -711,7 +872,7 @@ class DumanwuLogic:
         return []
 
 
-# ─── DESCARGA DE IMÁGENES ─────────────────────────────────────────────────────
+# ─── DESCARGA ─────────────────────────────────────────────────────────────────
 def save_img(raw: bytes, path: str, fmt: str) -> None:
     if not has_pillow or str(fmt) == "original" or Image is None:
         with open(path, "wb") as f:
@@ -731,7 +892,6 @@ def save_img(raw: bytes, path: str, fmt: str) -> None:
 
 def dl_worker(args: tuple[str, str, int]) -> bool:
     url, folder, idx = args
-    # Use cast to str to avoid Literal comparison warning
     ext = USER_FORMAT if (has_pillow and str(USER_FORMAT) != "original") else "jpg"
     url_ext = os.path.splitext(url.split("?")[0])[-1].lower().lstrip(".")
     if url_ext in ("jpg", "jpeg", "png", "webp", "gif"):
@@ -750,7 +910,6 @@ def dl_worker(args: tuple[str, str, int]) -> bool:
     return False
 
 
-# ─── SELECCIÓN DE CAPÍTULOS ───────────────────────────────────────────────────
 def parse_selection(s: str, total: int) -> list[int]:
     s = s.strip().lower().replace(" ", "")
     if s == "all":
@@ -773,7 +932,6 @@ def parse_selection(s: str, total: int) -> list[int]:
 def download_series(slug: str, logic: DumanwuLogic):
     print(f"\n{UI.CYAN}[*] Cargando serie '{slug}'...{UI.END}")
     title, autor, sinopsis, chapters = logic.parse_series_page(slug)
-
     if not chapters:
         print(f"{UI.RED}[!] 0 capítulos. ¿Slug correcto?{UI.END}")
         return
@@ -783,7 +941,6 @@ def download_series(slug: str, logic: DumanwuLogic):
     print(f"    Sinopsis: {sinopsis[:100] or UI.YELLOW + 'N/A' + UI.END}")
     print(f"    Caps    : {len(chapters)}")
 
-    # Mostrar lista numerada para que el usuario sepa qué índice es cada capítulo
     PAGE = 20
     show_start = 0
     selection = ""
@@ -793,7 +950,6 @@ def download_series(slug: str, logic: DumanwuLogic):
         for idx in range(show_start, show_end):
             print(f"  {UI.BOLD}{idx + 1:4d}.{UI.END} {chapters[idx]['title']}")
         print(f" {UI.PURPLE}{'─' * 48}{UI.END}")
-
         nav = ""
         if show_end < len(chapters):
             nav += f" {UI.CYAN}n{UI.END}=más"
@@ -801,7 +957,6 @@ def download_series(slug: str, logic: DumanwuLogic):
             nav += f"  {UI.CYAN}p{UI.END}=ant"
         nav += "  o escribe selección y Enter"
         print(nav)
-
         raw = input(f"\n{UI.YELLOW} Caps ('1', '3-5,9', 'all') ➜ {UI.END}").strip()
         if raw.lower() == "n" and show_end < len(chapters):
             show_start += PAGE
@@ -831,13 +986,12 @@ def download_series(slug: str, logic: DumanwuLogic):
         return
 
     print(f"\n{UI.CYAN}[*] Descargando {len(to_dl)} capítulo(s)...{UI.END}")
-
     clean = re.sub(r'[\\/:*?"<>|]', "", title).strip()
     base_folder = f"{clean} [{slug}]"
     os.makedirs(base_folder, exist_ok=True)
 
     total_valid = 0
-    failed: list[tuple[int, ChapterDict]] = []  # capítulos que fallaron para reintentar al final
+    failed: list[tuple[int, ChapterDict]] = []
 
     for i, cap in enumerate(to_dl):
         print(f"  [{i + 1}/{len(to_dl)}] {cap['title']}...", end=" ", flush=True)
@@ -847,15 +1001,13 @@ def download_series(slug: str, logic: DumanwuLogic):
             time.sleep(5)
             imgs = logic.extract_images(cap)
         if not imgs:
-            print(f"  {UI.RED}✗ fallido, se reintentará al final{UI.END}")
+            print(f"  {UI.RED}✗ fallido{UI.END}")
             failed.append((i, cap))
             continue
         print()
-
         clean_title = re.sub(r'[\\/:*?"<>|]', "", cap["title"]).strip()
         c_folder = os.path.join(base_folder, f"{i + 1:03d} - {clean_title}")
         os.makedirs(c_folder, exist_ok=True)
-
         comp, valid = 0, 0
         with ThreadPoolExecutor(max_workers=MAX_WORKERS_DL) as ex:
             futures = {
@@ -867,15 +1019,11 @@ def download_series(slug: str, logic: DumanwuLogic):
                     valid += 1
                 perc = int(30 * comp // len(imgs))
                 _ = sys.stdout.write(
-                    f"\r   [{UI.CYAN}{'█' * perc}{'-' * (30 - perc)}{UI.END}]" +
-                    f" {comp}/{len(imgs)}"
+                    f"\r   [{UI.CYAN}{'█' * perc}{'-' * (30 - perc)}{UI.END}] {comp}/{len(imgs)}"
                 )
                 _ = sys.stdout.flush()
-
         total_valid += valid
         print()
-
-        # Empaquetar capítulo
         out = os.path.join(base_folder, f"{i + 1:03d} - {clean_title}.{OUTPUT_TYPE}")
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
             for f in sorted(os.listdir(c_folder)):
@@ -885,7 +1033,6 @@ def download_series(slug: str, logic: DumanwuLogic):
         if DELETE_TEMP:
             shutil.rmtree(c_folder)
 
-    # ── Reintentar capítulos fallidos (última oportunidad) ──────────────────
     if failed:
         print(
             f"\n{UI.YELLOW}[*] Reintentando {len(failed)} cap(s) fallido(s)...{UI.END}"
@@ -915,7 +1062,7 @@ def download_series(slug: str, logic: DumanwuLogic):
                         valid += 1
                     perc = int(30 * comp // len(imgs))
                     _ = sys.stdout.write(
-                        f"\r   [{UI.CYAN}{'█' * perc}{'-' * (30 - perc)}{UI.END}]" + f" {comp}/{len(imgs)}"
+                        f"\r   [{UI.CYAN}{'█' * perc}{'-' * (30 - perc)}{UI.END}] {comp}/{len(imgs)}"
                     )
                     _ = sys.stdout.flush()
             total_valid += valid
@@ -930,7 +1077,6 @@ def download_series(slug: str, logic: DumanwuLogic):
                         zf.write(full, f)
             if DELETE_TEMP:
                 shutil.rmtree(c_folder)
-
         if still_failed:
             print(f"\n{UI.RED}[!] No se pudieron descargar:{UI.END}")
             for t in still_failed:
@@ -939,14 +1085,104 @@ def download_series(slug: str, logic: DumanwuLogic):
     if total_valid == 0:
         print(f"\n{UI.RED}[!] No se descargó ninguna imagen.{UI.END}")
         return
-
     print(f"\n  {UI.GREEN}[OK] Completado → {base_folder}/{UI.END}")
 
 
-# ─── MENÚ ─────────────────────────────────────────────────────────────────────
+# ─── MENÚ CATÁLOGO ────────────────────────────────────────────────────────────
 MAX_RESULTS_PAGE = 20
 
 
+def menu_catalog(logic: DumanwuLogic) -> None:
+    """
+    Carga TODAS las series del sitio en paralelo y permite
+    filtrar por nombre y descargar directamente por número.
+    """
+    UI.header()
+    print(f"\n {UI.CYAN}Cargando catálogo completo del sitio...{UI.END}\n")
+
+    all_items = load_full_catalog(workers=8)
+
+    if not all_items:
+        # Fallback: si no se detectó URL de catálogo, ofrecer búsqueda directa
+        print(f"\n {UI.YELLOW}No se pudo cargar el catálogo automáticamente.{UI.END}")
+        print(
+            f" Usa la opción {UI.BOLD}2. Buscar serie{UI.END} para encontrar series.\n"
+        )
+        _ = input(f"{UI.CYAN} Enter para volver...{UI.END}")
+        return
+
+    filtered = all_items[:]
+    filter_text = ""
+    page = 0
+
+    while True:
+        UI.header()
+        total_pages = max(1, (len(filtered) + MAX_RESULTS_PAGE - 1) // MAX_RESULTS_PAGE)
+        page = max(0, min(page, total_pages - 1))
+        start = page * MAX_RESULTS_PAGE
+        end = min(start + MAX_RESULTS_PAGE, len(filtered))
+
+        header_line = (
+            f" {UI.PURPLE}Catálogo{UI.END}  {UI.BLUE}│{UI.END}"
+            f"  {UI.BOLD}{len(filtered)}{UI.END} series"
+        )
+        if filter_text:
+            header_line += (
+                f"  {UI.BLUE}│{UI.END}  filtro: {UI.YELLOW}{filter_text}{UI.END}"
+            )
+        header_line += (
+            f"  {UI.BLUE}│{UI.END}  pág {UI.BOLD}{page + 1}/{total_pages}{UI.END}"
+        )
+        print(f"\n{header_line}\n")
+
+        print(f" {UI.PURPLE}{'─' * 54}{UI.END}")
+        for i, item in enumerate(filtered[start:end]):
+            latest = (
+                f"  {UI.BLUE}│{UI.END} {UI.CYAN}{item['latest'][:20]}{UI.END}"
+                if item.get("latest")
+                else ""
+            )
+            print(
+                f"  {UI.BOLD}{start + i + 1:4d}.{UI.END}  {item['title'][:45]}{latest}"
+            )
+        print(f" {UI.PURPLE}{'─' * 54}{UI.END}")
+
+        print(
+            f"\n  {UI.CYAN}n{UI.END}=sig  {UI.CYAN}p{UI.END}=ant"
+            f"  {UI.CYAN}f{UI.END}=filtrar  {UI.CYAN}q{UI.END}=volver"
+            f"  {UI.CYAN}[número]{UI.END}=descargar"
+        )
+        cmd = input(f"\n{UI.YELLOW} ➜ {UI.END}").strip()
+
+        if cmd.lower() == "q":
+            return
+
+        elif cmd.lower() == "f":
+            ft = input(
+                f"  {UI.YELLOW}Filtrar por nombre (vacío = mostrar todos) ➜ {UI.END}"
+            ).strip()
+            filter_text = ft
+            filtered = (
+                [it for it in all_items if ft.lower() in it["title"].lower()]
+                if ft
+                else all_items[:]
+            )
+            page = 0
+
+        elif cmd.lower() == "n" and page < total_pages - 1:
+            page += 1
+
+        elif cmd.lower() == "p" and page > 0:
+            page -= 1
+
+        elif cmd.isdigit():
+            idx = int(cmd) - 1
+            if 0 <= idx < len(filtered):
+                download_series(filtered[idx]["slug"], logic)
+                _ = input(f"\n{UI.CYAN} Enter para continuar...{UI.END}")
+
+
+# ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
     print(
         f"{UI.CYAN}[*] Cargando semillas XOR desde all2.js...{UI.END}",
@@ -964,11 +1200,11 @@ def main():
         print(f"\n {UI.PURPLE}Menú:{UI.END}")
         print(f" ├── {UI.BOLD}1.{UI.END} Descargar por Slug  (ej: trbtGKl)")
         print(f" ├── {UI.BOLD}2.{UI.END} Buscar serie")
-        print(f" ├── {UI.BOLD}3.{UI.END} Recargar semillas XOR")
-        print(f" └── {UI.BOLD}4.{UI.END} Salir")
+        print(f" ├── {UI.BOLD}3.{UI.END} 📂  Explorar catálogo completo")
+        print(f" ├── {UI.BOLD}4.{UI.END} Recargar semillas XOR")
+        print(f" └── {UI.BOLD}5.{UI.END} Salir")
         print(
-            f"\n Salida: {UI.CYAN}{OUTPUT_TYPE.upper()}{UI.END}  " +
-            f"Imagen: {UI.CYAN}{USER_FORMAT.upper()}{UI.END}"
+            f"\n Salida: {UI.CYAN}{OUTPUT_TYPE.upper()}{UI.END}  Imagen: {UI.CYAN}{USER_FORMAT.upper()}{UI.END}"
         )
 
         op = input(f"\n{UI.YELLOW} ➜ {UI.END}").strip()
@@ -990,7 +1226,6 @@ def main():
                 print(f"{UI.RED} Sin resultados.{UI.END}")
                 time.sleep(2)
                 continue
-
             page = 0
             while True:
                 UI.header()
@@ -1020,12 +1255,15 @@ def main():
                     break
 
         elif op == "3":
-            _seeds_cache.clear()
-            _ = _load_seeds()
-            print(f"{UI.GREEN}[OK] {len(seeds)} semillas recargadas.{UI.END}")
-            time.sleep(1.5)
+            menu_catalog(logic)
 
         elif op == "4":
+            _seeds_cache.clear()
+            _ = _load_seeds()
+            print(f"{UI.GREEN}[OK] {len(_seeds_cache)} semillas recargadas.{UI.END}")
+            time.sleep(1.5)
+
+        elif op == "5":
             print(f"{UI.CYAN} ¡Hasta pronto!{UI.END}")
             break
 
