@@ -1,7 +1,7 @@
 """
-DUMANWU DOWNLOADER v5.5
-100% requests — Decryptor Inteligente
-Fixes: orden natural (HTML+AJAX), extracción robusta, semillas XOR automáticas
+YUMANHUA DOWNLOADER v1.0
+100% requests — Decryptor Inteligente (Basado en Dumanwu)
+Fixes: orden de capítulos, Scrapling universal, semillas XOR automáticas
 """
 
 from __future__ import annotations
@@ -196,7 +196,7 @@ except (ImportError, Exception):
             try:
                 select_one = getattr(self._n, "select_one", None)
                 if callable(select_one):
-                    res = cast("object | None", select_one(res))
+                    res = cast("object | None", select_one(sel))
                     return BS4Elem(res) if res else None
                 return None
             except Exception:
@@ -238,7 +238,7 @@ except ImportError:
     has_pillow = False
 
 # ─── CONFIGURACIÓN ─────────────────────────────────────────────────────────────
-BASE_URL = "https://dumanwu.com"
+BASE_URL = "http://m.yumanhua.com"
 OUTPUT_TYPE = "zip"
 USER_FORMAT = "webp"
 MAX_WORKERS_DL = 50
@@ -289,7 +289,7 @@ class UI:
             else f"{UI.YELLOW}⚠ semillas hardcoded{UI.END}"
         )
         print(f"{UI.BLUE}╔══════════════════════════════════════╗")
-        print(f"║ {UI.BOLD}DUMANWU DOWNLOADER v5.5{UI.END}{UI.BLUE}             ║")
+        print(f"║ {UI.BOLD}YUMANHUA DOWNLOADER v1.0{UI.END}{UI.BLUE}            ║")
         print("║ 100% requests — Decryptor Inteligente  ║")
         print(f"╚══════════════════════════════════════╝{UI.END}")
         print(f" Parser: {UI.CYAN}{parser_name}{UI.END}  Seeds: {seed_status}")
@@ -444,8 +444,10 @@ def _decrypt_images(html: str) -> list[str]:
         decoded = _decode_packer(p, base, k)
         
         # Nueva regex más agresiva para capturar el base64 cifrado
+        # Buscamos cualquier cosa larga entre comillas que parezca base64
         matches = re.findall(r'["\']([A-Za-z0-9+/]{100,})["\']', decoded)
         if not matches:
+            # Reintento: buscar sin comillas si está asignado a una variable
             matches = re.findall(r'=\s*["\']?([A-Za-z0-9+/]{100,})', decoded)
             
         for match_val in matches:
@@ -465,6 +467,7 @@ def _decrypt_images(html: str) -> list[str]:
                     if "http" not in final:
                         continue
                         
+                    # Si es un JSON list de URLs
                     try:
                         data_json = json.loads(final)
                         if isinstance(data_json, list):
@@ -473,6 +476,7 @@ def _decrypt_images(html: str) -> list[str]:
                     except:
                         pass
                         
+                    # Si son URLs crudas en texto
                     urls2 = re.findall(r"https?://[^\s\"',\[\]]+", final)
                     urls2 = [u for u in urls2 if any(e in u.lower() for e in [".jpg", ".jpeg", ".png", ".webp", "tplv"])]
                     if urls2: return urls2
@@ -495,7 +499,7 @@ class CatalogItem(TypedDict):
 
 
 # Categorías del sitio
-_DW_SORTS = {
+_YM_SORTS = {
     1: "冒险",
     2: "热血",
     3: "都市",
@@ -513,7 +517,7 @@ _DW_SORTS = {
     15: "连载",
     16: "完结",
 }
-_DW_RANKS = {
+_YM_RANKS = {
     1: "精品榜",
     2: "人气榜",
     3: "推荐榜",
@@ -550,7 +554,7 @@ def _parse_series_html(html: str) -> list[CatalogItem]:
 
     # Estrategia 1: bloque <a href="/SLUG/">...<h2>título</h2>
     for m in re.finditer(
-        r'<a\s[^>]*href="(?:https?://dumanwu\.com)?/([A-Za-z0-9]{5,10})/"[^>]*>'
+        r'<a\s[^>]*href="(?:http://m\.yumanhua\.com)?/([A-Za-z0-9]{5,10})/"[^>]*>'
         r"([\s\S]{0,400}?)</a>",
         html,
     ):
@@ -571,7 +575,7 @@ def _parse_series_html(html: str) -> list[CatalogItem]:
     # Estrategia 2: si no hay h2, extraer slugs únicos alfanuméricos de 7 chars
     if not items:
         for m in re.finditer(
-            r'href="(?:https?://dumanwu\.com)?/([A-Za-z0-9]{7})/"', html
+            r'href="(?:http://m\.yumanhua\.com)?/([A-Za-z0-9]{7})/"', html
         ):
             slug = m.group(1)
             if slug in _SYSTEM_SLUGS or slug in seen:
@@ -677,9 +681,9 @@ def load_full_catalog(workers: int = 8) -> list[CatalogItem]:
     all_items: list[CatalogItem] = []
     seen: set[str] = set()
 
-    for sort_id, sort_name in _DW_SORTS.items():
+    for sort_id, sort_name in _YM_SORTS.items():
         sys.stdout.write(
-            f"  {UI.CYAN}[{sort_id}/{len(_DW_SORTS)}] {sort_name}...{UI.END}   \r"
+            f"  {UI.CYAN}[{sort_id}/{len(_YM_SORTS)}] {sort_name}...{UI.END}   \r"
         )
         sys.stdout.flush()
 
@@ -692,7 +696,7 @@ def load_full_catalog(workers: int = 8) -> list[CatalogItem]:
                 added += 1
 
         sys.stdout.write(
-            f"  {UI.CYAN}[{sort_id}/{len(_DW_SORTS)}] {sort_name}"
+            f"  {UI.CYAN}[{sort_id}/{len(_YM_SORTS)}] {sort_name}"
             f" — {added} nuevas — {len(all_items)} total{UI.END}   \r"
         )
         sys.stdout.flush()
@@ -702,7 +706,7 @@ def load_full_catalog(workers: int = 8) -> list[CatalogItem]:
     return all_items
 
 
-class DumanwuLogic:
+class YumanhuaLogic:
     def parse_series_page(self, slug: str) -> tuple[str, str, str, list[ChapterDict]]:
         url = f"{BASE_URL}/{slug}/"
         r = SESSION.get(url, timeout=15)
@@ -719,12 +723,15 @@ class DumanwuLogic:
         )
 
         m_autor = re.search(r"作者[：:]\s*([^\s<\n，,&]+)", r.text)
+        if not m_autor:
+            m_autor = re.search(r'property="og:author"\s+content="([^"]+)"', r.text)
         autor = m_autor.group(1).strip() if m_autor else ""
 
         sinopsis = ""
-        intro_p = sel.css_first("p.introduction") or sel.css_first("div.cartoon-introduction")
-        if intro_p and intro_p.text:
-            sinopsis = intro_p.text.strip()[:600]
+        # Intentar con diferentes selectores de introducción
+        intro_sel = sel.css_first("p.introduction") or sel.css_first("div.cartoon-introduction")
+        if intro_sel and intro_sel.text:
+            sinopsis = intro_sel.text.strip()[:600]
         else:
             for p in sel.css("p"):
                 t = p.text
@@ -739,9 +746,10 @@ class DumanwuLogic:
 
         # 1. Obtener los capítulos del HTML inicial (suelen ser los más recientes)
         slug_esc = re.escape(slug)
+        # Buscamos específicamente en el contenedor de la lista para evitar enlaces de navegación
         chap_box = sel.css_first(".chaplist-box")
         html_to_parse = chap_box.text if chap_box else r.text
-
+        
         for m2 in re.finditer(
             rf'href="(/{slug_esc}/([A-Za-z0-9]+)\.html)"[^>]*>([^<]*)</a>', r.text
         ):
@@ -787,18 +795,22 @@ class DumanwuLogic:
         series_slug = cap_url.split("/")[-2]
         referer = f"{BASE_URL}/{series_slug}/"
         
+        html = cap.get("html")
         urls: list[str] = []
 
-        for attempt in range(4):
+        for attempt in range(4):  # Aumentamos a 4 intentos
             try:
                 r = SESSION.get(
                     cap_url, timeout=20, headers={**HEADERS, "Referer": referer}
                 )
                 if r.status_code == 200:
                     html = r.text
+                    # Intentar desencriptar
                     urls = _decrypt_images(html)
-                    if urls: break
+                    if urls:
+                        break
                     
+                    # Si no hay urls en el eval, buscar en el fallback (data-src)
                     seen_fb: set[str] = set()
                     for pattern in [r'data-src="(https?://[^"]+)"', r'data-original="(https?://[^"]+)"']:
                         for m in re.finditer(pattern, html):
@@ -806,14 +818,24 @@ class DumanwuLogic:
                             if src not in seen_fb and not any(p in src.lower() for p in _UI_PATHS) and "scl3phc04j" not in src:
                                 seen_fb.add(src)
                                 urls.append(src)
-                    if urls: break
+                    
+                    if urls:
+                        break
+                
+                # Si llegamos aquí sin URLs, esperamos más (el servidor puede estar rate-limiting)
                 time.sleep(2 + attempt)
             except Exception:
                 time.sleep(2)
 
-        if not urls: return []
+        if not urls:
+            return []
 
-        content_urls = [u for u in urls if not any(p in u.lower() for p in _UI_PATHS) and "scl3phc04j" not in u]
+        # Limpieza final de URLs (quitar basura de la interfaz)
+        content_urls = [
+            u for u in urls 
+            if not any(p in u.lower() for p in _UI_PATHS) 
+            and "scl3phc04j" not in u
+        ]
         return content_urls
 
     def search(self, query: str) -> list[dict[str, str]]:
@@ -898,7 +920,7 @@ def parse_selection(s: str, total: int) -> list[int]:
     return sorted(indices)
 
 
-def download_series(slug: str, logic: DumanwuLogic):
+def download_series(slug: str, logic: YumanhuaLogic):
     print(f"\n{UI.CYAN}[*] Cargando serie '{slug}'...{UI.END}")
     title, autor, sinopsis, chapters = logic.parse_series_page(slug)
     if not chapters:
@@ -1061,7 +1083,7 @@ def download_series(slug: str, logic: DumanwuLogic):
 MAX_RESULTS_PAGE = 20
 
 
-def menu_catalog(logic: DumanwuLogic) -> None:
+def menu_catalog(logic: YumanhuaLogic) -> None:
     """
     Carga TODAS las series del sitio en paralelo y permite
     filtrar por nombre y descargar directamente por número.
@@ -1162,12 +1184,12 @@ def main():
     src = "all2.js" if len(seeds) != len(_SEEDS_FALLBACK_HEX) else "hardcoded"
     print(f"\r{UI.GREEN}[OK] {len(seeds)} semillas cargadas ({src}).{' ' * 20}{UI.END}")
 
-    logic = DumanwuLogic()
+    logic = YumanhuaLogic()
 
     while True:
         UI.header()
         print(f"\n {UI.PURPLE}Menú:{UI.END}")
-        print(f" ├── {UI.BOLD}1.{UI.END} Descargar por Slug  (ej: trbtGKl)")
+        print(f" ├── {UI.BOLD}1.{UI.END} Descargar por Slug  (ej: trwvTGi)")
         print(f" ├── {UI.BOLD}2.{UI.END} Buscar serie")
         print(f" ├── {UI.BOLD}3.{UI.END} 📂  Explorar catálogo completo")
         print(f" ├── {UI.BOLD}4.{UI.END} Recargar semillas XOR")
