@@ -1,4 +1,4 @@
-﻿"""
+"""
 ╔══════════════════════════════════════════╗
 ║  BAKAMH DOWNLOADER  v1.1                 ║
 ║       bakamh.com — 巴卡漫画              ║
@@ -131,7 +131,7 @@ def banner(sub=""):
 #  SESIÓN HTTP
 # ══════════════════════════════════════════════════════════════════════════════
 if _USE_CURL:
-    _sess = CurlSession(impersonate="chrome123")
+    _sess = CurlSession(impersonate="chrome123")  # type: ignore
     _sess.headers.update(HEADERS)
     dbg("curl_cffi chrome123 listo")
 else:
@@ -196,7 +196,7 @@ def _soup(html):
     if not _HAS_BS4:
         err("beautifulsoup4 no instalado: pip install beautifulsoup4")
         return None
-    return BeautifulSoup(html, "html.parser")
+    return BeautifulSoup(html, "html.parser")  # type: ignore
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -628,7 +628,7 @@ def get_genres():
                     continue
                 for nav_el in nav_els:
                     for a in nav_el.find_all("a", href=True):
-                        href = a["href"]
+                        href = str(a["href"])
                         if prefix not in href:
                             continue
                         idx = href.index(prefix) + len(prefix)
@@ -644,7 +644,7 @@ def get_genres():
             # ── Paso 2: si no encontró nada en nav, buscar en toda la página ──
             if not genres:
                 for a in soup.find_all("a", href=True):
-                    href = a["href"]
+                    href = str(a["href"])
                     if prefix not in href:
                         continue
                     idx = href.index(prefix) + len(prefix)
@@ -699,7 +699,7 @@ def _genres_from_catalog():
         genres = []
         seen = set()
         for a in soup.find_all("a", href=True):
-            href = a["href"]
+            href = str(a["href"])
             if prefix not in href:
                 continue
             # Excluir paginación y URLs de capítulos
@@ -986,11 +986,11 @@ def search(query, page=1):
     avanza en lotes hasta recibir pagina vacia.
     """
     if not hasattr(search, "_cache"):
-        search._cache = {}
+        search._cache = {}  # type: ignore
 
     key = query.lower().strip()
 
-    if key not in search._cache:
+    if key not in search._cache:  # type: ignore
         WORKERS = 8
         all_items = []
         seen = set()
@@ -1045,10 +1045,10 @@ def search(query, page=1):
         ]
         if not pages:
             pages = [[]]
-        search._cache[key] = pages
+        search._cache[key] = pages  # type: ignore
         dbg(f"  '{query}': {len(all_items)} totales, {len(pages)} paginas UI")
 
-    pages = search._cache[key]
+    pages = search._cache[key]  # type: ignore
     total = len(pages)
     idx = max(0, min(page - 1, total - 1))
     return pages[idx], total
@@ -1255,7 +1255,7 @@ def _dl_image(args):
                 continue
             if USER_FORMAT != "original" and _HAS_PIL:
                 try:
-                    img = Image.open(BytesIO(raw)).convert("RGB")
+                    img = Image.open(BytesIO(raw)).convert("RGB")  # type: ignore
                     buf = BytesIO()
                     fmt = {"jpg": "JPEG", "png": "PNG", "webp": "WEBP"}.get(
                         USER_FORMAT, "JPEG"
@@ -1283,7 +1283,7 @@ def _pack(files, out_path, fmt):
         imgs = []
         for f in sorted(files):
             try:
-                imgs.append(Image.open(f).convert("RGB"))
+                imgs.append(Image.open(f).convert("RGB"))  # type: ignore
             except Exception:
                 pass
         if imgs:
@@ -1377,7 +1377,7 @@ def get_chapter_images(manga_slug, chapter_slug):
             ".reading-content noscript img, "
             "div#manga-reading-nav-head ~ div img"
         ):
-            src = (
+            src = str(
                 img.get("data-lazy-src") or img.get("data-src") or img.get("src") or ""
             ).strip()
             if src and not src.startswith("data:"):
@@ -1441,7 +1441,7 @@ def get_chapter_images(manga_slug, chapter_slug):
                     s3 = _soup(frag)
                     if s3:
                         for img in s3.select("img"):
-                            src = (img.get("data-src") or img.get("src") or "").strip()
+                            src = str(img.get("data-src") or img.get("src") or "").strip()
                             if src.startswith("http"):
                                 urls.append(src)
                         dbg(f"  Método C: {len(urls)} imgs")

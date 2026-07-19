@@ -191,7 +191,7 @@ def _parse_series_from_html(html: str, mode: Mode) -> list[dict[str, str]]:
     seen: set[str] = set()
 
     for a in soup.find_all("a", href=True):
-        m = pat.search(a["href"])
+        m = pat.search(str(a.get("href", "")))
         if not m:
             continue
         toon_id, enc_title = m.group(1), m.group(2)
@@ -372,7 +372,7 @@ def parse_series_page(
     chapters: list[dict] = []
 
     for a in soup.find_all("a", href=True):
-        mm = chap_re.search(a["href"])
+        mm = chap_re.search(str(a.get("href", "")))
         if not mm:
             continue
         num = int(mm.group(1))
@@ -402,7 +402,7 @@ def extract_images(chapter_html: str) -> list[str]:
             decoded = base64.b64decode(m64.group(1)).decode("utf-8", errors="replace")
             soup2 = _soup(decoded)
             urls = [
-                img["src"]
+                str(img["src"])
                 for img in soup2.find_all("img", src=True)
                 if str(img["src"]).startswith("http")
                 and not any(p in str(img["src"]) for p in _UI_PATHS)
@@ -427,7 +427,7 @@ def extract_images(chapter_html: str) -> list[str]:
     VALID_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
     candidates: list[str] = []
     for img in scope.find_all("img"):
-        src = img.get("src") or img.get("data-src") or ""
+        src = str(img.get("src") or img.get("data-src") or "")
         if (
             src.startswith("http")
             and not any(p in src for p in _UI_PATHS)
@@ -558,7 +558,7 @@ def download_gallery(toon_id: str, enc_title: str, mode: Mode) -> None:
     title = str(data["title"])
     autor_s = str(data.get("autor", ""))
     sinopsis_s = str(data.get("sinopsis", ""))
-    all_chapters: list[dict] = list(data["chapters"])
+    all_chapters: list[dict] = data["chapters"] if isinstance(data.get("chapters"), list) else []
 
     if not all_chapters:
         print(f"{C.RED}[!] 0 capítulos encontrados.{C.END}")

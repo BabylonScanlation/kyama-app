@@ -18,8 +18,8 @@ from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import unpad
+from Crypto.Cipher import AES  # type: ignore
+from Crypto.Util.Padding import unpad  # type: ignore
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
@@ -46,8 +46,9 @@ def ok(s):  return f"{C.G}[OK]{C.E} {s}"
 def err(s): return f"{C.R}[!]{C.E}  {s}"
 def inf(s): return f"{C.B}[*]{C.E} {s}"
 
+import subprocess
 def header():
-    os.system("cls" if os.name == "nt" else "clear")
+    subprocess.run(["cls" if os.name == "nt" else "clear"], shell=True)
     print(f"{C.M}  +==========================================+")
     print(f"  |   pigmh.com Scraper v3.0               |")
     print(f"  |   AES-128-CBC  |  puro requests        |")
@@ -55,7 +56,7 @@ def header():
 
 # ─── SESION ──────────────────────────────────────────────────
 SESSION = requests.Session()
-_adp = requests.adapters.HTTPAdapter(pool_connections=MAX_WORKERS, pool_maxsize=MAX_WORKERS)
+_adp = requests.adapters.HTTPAdapter(pool_connections=MAX_WORKERS, pool_maxsize=MAX_WORKERS)  # type: ignore
 SESSION.mount("http://", _adp); SESSION.mount("https://", _adp)
 SESSION.headers.update(HEADERS)
 
@@ -130,7 +131,8 @@ def get_series_info(slug: str) -> tuple[str, list[dict]]:
     chapters: list[dict] = []
     seen: set[str] = set()
     for a in soup.find_all("a", href=re.compile(r"/chapter/[A-Za-z0-9]+")):
-        cslug = a["href"].split("/chapter/")[1].rstrip("/").split("?")[0]
+        href = str(a.get("href", ""))
+        cslug = href.split("/chapter/")[1].rstrip("/").split("?")[0]
         if cslug in seen: continue
         seen.add(cslug)
         chapters.append({"slug": cslug, "title": a.get_text(strip=True) or cslug})
@@ -152,10 +154,11 @@ def search(query: str) -> list[dict]:
         results: list[dict] = []
         seen: set[str] = set()
         for a in soup.find_all("a", href=re.compile(r"/comic/[A-Za-z0-9]+")):
-            slug = a["href"].split("/comic/")[1].rstrip("/").split("?")[0]
+            href = str(a.get("href", ""))
+            slug = href.split("/comic/")[1].rstrip("/").split("?")[0]
             if slug in seen: continue
             seen.add(slug)
-            name = (a.get("title") or a.get_text(strip=True) or "").strip()
+            name = str(a.get("title") or a.get_text(strip=True) or "").strip()
             if len(name) > 1:
                 results.append({"slug": slug, "title": name})
         return results
@@ -172,11 +175,12 @@ def load_catalog() -> list[dict]:
             if r.status_code != 200: continue
             soup = BeautifulSoup(r.text, "html.parser")
             for a in soup.find_all("a", href=re.compile(r"/comic/[A-Za-z0-9]+")):
-                slug = a["href"].split("/comic/")[1].rstrip("/").split("?")[0]
+                href = str(a.get("href", ""))
+                slug = href.split("/comic/")[1].rstrip("/").split("?")[0]
                 if slug in seen: continue
                 seen.add(slug)
                 name = re.sub(r"\s+", " ",
-                              (a.get("title") or a.get_text(strip=True) or "").strip())
+                              str(a.get("title") or a.get_text(strip=True) or "")).strip()
                 if len(name) >= 2:
                     catalog.append({"slug": slug, "title": name})
         except Exception:
@@ -228,7 +232,7 @@ def download_chapter(cap_slug: str, num: int, total: int, base_dir: str) -> bool
             ok_c += 1 if fut.result() else 0
             fail_c += 0 if fut.result() else 1
             done = ok_c + fail_c
-            pct  = int(30 * done // len(imgs))
+            pct  = 30 * done // len(imgs)
             sys.stdout.write(
                 f"\r  [{num}/{total}] {safe_name(cap_title)[:28]:28s} "
                 f"[{C.G}{'#'*pct}{C.E}{'-'*(30-pct)}] {done}/{len(imgs)}"

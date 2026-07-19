@@ -100,7 +100,7 @@ class Unbaser:
     def __init__(self, base):
         self.base = base
         if 2 <= base <= 36:
-            self.unbase = lambda s: int(s, base)
+            self.unbase = lambda string: int(string, base)
         else:
             alphabet = self.ALPHABET.get(base, self.ALPHABET[62])
             self.dictionary = {c: i for i, c in enumerate(alphabet)}
@@ -153,8 +153,9 @@ class C:
     EN = "\033[0m"
 
 
+import subprocess
 def header():
-    os.system("cls" if os.name == "nt" else "clear")
+    subprocess.run(["cls" if os.name == "nt" else "clear"], shell=True)
     print(f"{C.BL}╔══════════════════════════════════════════╗")
     print(f"║ {C.BO}MANHUAGUI DOWNLOADER v1.1.0{C.EN}{C.BL}               ║")
     print(f"║ {C.CY}manhuagui.com{C.EN}{C.BL}                             ║")
@@ -165,7 +166,7 @@ def header():
 #  LZSTRING
 # ══════════════════════════════════════════════════════════════════════════════
 _B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
-_B64_MAP = {ch: i for i, ch in enumerate(_B64_CHARS)}
+_B64_MAP: dict[str, int] = {ch: i for i, ch in enumerate(_B64_CHARS)}
 
 
 def lzstring_decompress_base64(compressed: str) -> str:
@@ -356,7 +357,7 @@ def browse_page(
         a = li.find("a", href=re.compile(r"/comic/\d+/"))
         if not a:
             continue
-        m = re.search(r"/comic/(\d+)/", a["href"])
+        m = re.search(r"/comic/(\d+)/", str(a.get("href", "")))
         if not m:
             continue
         cid = m.group(1)
@@ -372,7 +373,7 @@ def browse_page(
 
     total = page
     for a in soup.select("a[href*='_p']"):
-        m = re.search(r"_p(\d+)\.html", a["href"])
+        m = re.search(r"_p(\d+)\.html", str(a.get("href", "")))
         if m:
             total = max(total, int(m.group(1)))
     m2 = re.search(r"共\s*(\d+)\s*页", soup.get_text())
@@ -450,7 +451,7 @@ def search(query: str, page=1) -> tuple[list[dict], int]:
         a = li.find("a", href=re.compile(r"/comic/\d+/"))
         if not a:
             continue
-        m = re.search(r"/comic/(\d+)/", a["href"])
+        m = re.search(r"/comic/(\d+)/", str(a.get("href", "")))
         if not m:
             continue
         cid = m.group(1)
@@ -462,7 +463,7 @@ def search(query: str, page=1) -> tuple[list[dict], int]:
 
     total = page
     for a in soup.select("a[href*='_p']"):
-        m = re.search(r"_p(\d+)\.html", a["href"])
+        m = re.search(r"_p(\d+)\.html", str(a.get("href", "")))
         if m:
             total = max(total, int(m.group(1)))
     m2 = re.search(r"共\s*(\d+)\s*页", soup.get_text())
@@ -503,7 +504,7 @@ def get_comic(comic_id: int) -> dict:
         "input", attrs={"id": "__VIEWSTATE"}
     )
     if vs_tag and vs_tag.get("value"):
-        vs_html = lzstring_decompress_base64(vs_tag["value"])
+        vs_html = lzstring_decompress_base64(str(vs_tag.get("value", "")))
         if vs_html:
             vs_soup = BeautifulSoup(vs_html, "lxml")
             chapters = _parse_chapters(vs_soup, comic_id)
@@ -529,7 +530,7 @@ def _parse_chapters(soup: BeautifulSoup, comic_id: int) -> list[dict]:
         for a in section.find_all(
             "a", href=re.compile(rf"/comic/{comic_id}/\d+\.html")
         ):
-            m = re.search(rf"/comic/{comic_id}/(\d+)\.html", a["href"])
+            m = re.search(rf"/comic/{comic_id}/(\d+)\.html", str(a.get("href", "")))
             if not m:
                 continue
             chid = m.group(1)
@@ -683,7 +684,7 @@ def _save(raw: bytes, path: str):
             if fmt == "webp"
             else {}
         )
-        img.save(path, **kw)
+        img.save(path, **kw)  # type: ignore
     except Exception:
         with open(path, "wb") as f:
             f.write(raw)
@@ -925,8 +926,9 @@ def menu_download():
         input(f"\n{C.GR} Listo. Enter para volver...{C.EN}")
         return
 
-    if re.search(r"/comic/(\d+)/", val):
-        choose_chapters(int(re.search(r"/comic/(\d+)/", val).group(1)))
+    m2 = re.search(r"/comic/(\d+)/", val)
+    if m2:
+        choose_chapters(int(m2.group(1)))
         return
     if val.isdigit():
         choose_chapters(int(val))

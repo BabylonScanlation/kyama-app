@@ -9,8 +9,8 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from typing import cast
-
 import requests
+import requests.adapters
 
 # --- SOPORTE PARA PILLOW ---
 has_pillow: bool
@@ -37,7 +37,7 @@ class UI:
 
     @staticmethod
     def header() -> None:
-        _ = os.system("cls" if os.name == "nt" else "clear")
+        _ = os.system("cls" if os.name == "nt" else "clear")  # type: ignore
         print(f"{UI.BLUE}╔══════════════════════════════════════╗")
         print(f"║ {UI.BOLD}HITOMI DOWNLOADER v1.3.0{UI.END}{UI.BLUE}             ║")
         print(f"╚══════════════════════════════════════╝{UI.END}")
@@ -300,7 +300,7 @@ def load_meta_batch(gids: list[int]) -> None:
 def _title(gid: int) -> str:
     m = METADATA_CACHE.get(str(gid), {})
     if isinstance(m, dict):
-        return str(cast(dict, m).get("title", "Sin título"))[:55]
+        return str(m.get("title", "Sin título"))[:55]
     return "Sin título"
 
 
@@ -373,7 +373,7 @@ def download_gallery(gid: int, logic: HitomiLogic) -> None:
             ]
             for _ in as_completed(futs):
                 comp += 1
-                pct = int(30 * comp // max(len(files), 1))
+                pct = 30 * comp // max(len(files), 1)
                 bar = "█" * pct + "─" * (30 - pct)
                 sys.stdout.write(f"\r   [{UI.CYAN}{bar}{UI.END}] {comp}/{len(files)}")
                 sys.stdout.flush()
@@ -411,12 +411,7 @@ def results_browser(
     ids: list[int], label: str, logic: HitomiLogic, paginated: bool = True
 ) -> None:
     page = 0
-
-
-def results_browser(
-    ids: list[int], label: str, logic: HitomiLogic, paginated: bool = True
-) -> None:
-    page = 0
+    end = len(ids)
     DISPLAY_PAGE = MAX_RESULTS_PAGE  # cuántos mostrar por página
     LOAD_BATCH = MAX_WORKERS_DL  # cuántos fetchear en paralelo a la vez
 
@@ -424,8 +419,8 @@ def results_browser(
         UI.header()
 
         if paginated:
-            start = page * CHUNK
-            end = min(start + CHUNK, len(ids))
+            start = page * DISPLAY_PAGE
+            end = min(start + DISPLAY_PAGE, len(ids))
             load_meta_batch(ids[start:end])
 
             print(f" {UI.PURPLE}{label}{UI.END}")

@@ -21,6 +21,7 @@ import sys
 import time
 import uuid
 import zipfile
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from getpass import getpass
 from io import BytesIO
@@ -75,7 +76,7 @@ SORT_OPTS = {
 _token: str = ""
 
 if _USE_CURL:
-    _sess = CurlSession()
+    _sess = CurlSession()  # type: ignore
 else:
     _sess = requests.Session()
     _sess.headers.update({"User-Agent": "okhttp/3.8.1"})
@@ -94,7 +95,7 @@ class C:
 
 
 def header(subtitle: str = ""):
-    os.system("cls" if os.name == "nt" else "clear")
+    subprocess.run(["cls" if os.name == "nt" else "clear"], shell=True)
     print(f"{C.BL}╔══════════════════════════════╗{C.EN}")
     print(
         f"{C.BL}║{C.EN}  {C.BO}{C.PU}哔咔漫画  DOWNLOADER{C.EN}  {C.BL}v1.1{C.EN}  {C.BL}║{C.EN}"
@@ -243,7 +244,7 @@ def _save_img(raw: bytes, path: str):
             if fmt == "webp"
             else {}
         )
-        img.save(path, **kw)
+        img.save(path, **kw)  # type: ignore
     except Exception:
         with open(path, "wb") as f:
             f.write(raw)

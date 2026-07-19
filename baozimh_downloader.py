@@ -22,7 +22,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, quote
 
 import requests
 from bs4 import BeautifulSoup
@@ -110,8 +110,10 @@ _BASE_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-SESSION_ORG: requests.Session = None
-SESSION_COM: requests.Session = None
+SESSION_ORG: requests.Session = requests.Session()
+SESSION_ORG.headers.update(_BASE_HEADERS)
+SESSION_COM: requests.Session = requests.Session()
+SESSION_COM.headers.update(_BASE_HEADERS)
 _ACTIVE_MIRROR: str = ""
 
 
@@ -140,13 +142,10 @@ def _find_active_mirror() -> str:
             if r.status_code == 200 and (
                 "page_direct" in r.text or "chapter_slot" in r.text
             ):
-                SESSION_COM = s
                 return mirror
         except Exception as e:
             dbg(f"mirror {mirror}: {e}")
         time.sleep(0.4)
-    SESSION_COM = requests.Session()
-    SESSION_COM.headers.update(_BASE_HEADERS)
     return ""
 
 
@@ -205,7 +204,7 @@ def _soup(html: str) -> BeautifulSoup:
 #  BÚSQUEDA  —  baozimh.org /s?q=QUERY
 # ══════════════════════════════════════════════════════════════════════════════
 def search_series(query: str) -> list:
-    url = f"{SITE_ORG}/s?q={requests.utils.quote(query)}"
+    url = f"{SITE_ORG}/s?q={quote(query)}"
     html = fetch_org(url)
     return _parse_cards(html) if html else []
 
@@ -215,7 +214,7 @@ def _parse_cards(html: str) -> list:
     results = []
     seen = set()
     for a in soup.find_all("a", href=re.compile(r"^/manga/[^/]+$")):
-        slug = re.match(r"^/manga/([^/]+)$", a.get("href", ""))
+        slug = re.match(r"^/manga/([^/]+)$", str(a.get("href", "")))
         if not slug:
             continue
         slug = slug.group(1)
@@ -421,10 +420,10 @@ def parse_series_meta(slug: str) -> Optional[dict]:
     if not html_org or f'"/manga/{slug}"' not in (html_org or ""):
         parts = sorted(re.findall(r"[a-z]{6,}", slug), key=len, reverse=True)
         for part in parts[:2]:
-            sq = fetch_org(f"{SITE_ORG}/s?q={requests.utils.quote(part)}")
+            sq = fetch_org(f"{SITE_ORG}/s?q={quote(str(part))}")
             if sq:
                 for a in _soup(sq).find_all("a", href=re.compile(r"^/manga/")):
-                    org_slug = re.match(r"^/manga/([^/]+)$", a.get("href", ""))
+                    org_slug = re.match(r"^/manga/([^/]+)$", str(a.get("href", "")))
                     if not org_slug:
                         continue
                     org_slug = org_slug.group(1)
@@ -679,7 +678,7 @@ def _resolve_com_slug(org_slug: str, title: str = "") -> str:
     for part in sorted(re.findall(r"[a-z]{5,}", org_slug), key=len, reverse=True):
         if part in _BAD_SLUGS:
             continue
-        found = _slug_from_sitemap(part)
+        found = _slug_from_sitemap(str(part))
         if found and found != org_slug:
             return found
     return org_slug
@@ -713,9 +712,9 @@ def _parse_com_chapters(html: str, slug: str) -> list:
     seen = set()
     for a in soup.find_all("a", href=re.compile(r"page_direct")):
         href = a.get("href", "")
-        if _NAV_HREFS.search(href):
+        if _NAV_HREFS.search(str(href)):
             continue
-        qs = parse_qs(urlparse(href).query)
+        qs = parse_qs(urlparse(str(href)).query)
         comic_id = qs.get("comic_id", [""])[0]
         ss = qs.get("section_slot", ["0"])[0]
         cs = qs.get("chapter_slot", ["-1"])[0]
@@ -821,7 +820,7 @@ def _extract_content_imgs(html: str) -> list:
     candidates = []
     for img in soup.find_all("img"):
         for attr in ("data-src", "data-original", "src"):
-            u = img.get(attr, "")
+            u = str(img.get(attr, ""))
             if u and not u.startswith("data:") and _valid_img(u):
                 if not u.startswith("http"):
                     u = "https:" + u

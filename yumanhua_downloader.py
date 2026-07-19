@@ -14,6 +14,7 @@ import shutil
 import sys
 import time
 import zipfile
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from typing import TYPE_CHECKING, Protocol, TypedDict, cast, runtime_checkable
@@ -282,7 +283,7 @@ class UI:
 
     @staticmethod
     def header() -> None:
-        _ = os.system("cls" if os.name == "nt" else "clear")
+        _ = subprocess.run(["cls" if os.name == "nt" else "clear"], shell=True)
         seed_status = (
             f"{UI.GREEN}✔ {len(_seeds_cache)} semillas{UI.END}"
             if _seeds_cache
@@ -296,7 +297,7 @@ class UI:
 
 
 SESSION = requests.Session()
-adapter = requests.adapters.HTTPAdapter(
+adapter = requests.adapters.HTTPAdapter(  # type: ignore
     pool_connections=MAX_WORKERS_DL, pool_maxsize=MAX_WORKERS_DL
 )
 SESSION.mount("http://", adapter)
@@ -865,7 +866,7 @@ class YumanhuaLogic:
 
 # ─── DESCARGA ─────────────────────────────────────────────────────────────────
 def save_img(raw: bytes, path: str, fmt: str) -> None:
-    if not has_pillow or str(fmt) == "original" or Image is None:
+    if not has_pillow or fmt == "original" or Image is None:
         with open(path, "wb") as f:
             _ = f.write(raw)
         return
@@ -1008,7 +1009,7 @@ def download_series(slug: str, logic: YumanhuaLogic):
                 comp += 1
                 if fut.result():
                     valid += 1
-                perc = int(30 * comp // len(imgs))
+                perc = 30 * comp // len(imgs)
                 _ = sys.stdout.write(
                     f"\r   [{UI.CYAN}{'█' * perc}{'-' * (30 - perc)}{UI.END}] {comp}/{len(imgs)}"
                 )
@@ -1051,7 +1052,7 @@ def download_series(slug: str, logic: YumanhuaLogic):
                     comp += 1
                     if fut.result():
                         valid += 1
-                    perc = int(30 * comp // len(imgs))
+                    perc = 30 * comp // len(imgs)
                     _ = sys.stdout.write(
                         f"\r   [{UI.CYAN}{'█' * perc}{'-' * (30 - perc)}{UI.END}] {comp}/{len(imgs)}"
                     )

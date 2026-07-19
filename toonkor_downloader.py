@@ -11,6 +11,7 @@ import shutil
 import sys
 import time
 import zipfile
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -60,7 +61,7 @@ class UI:
 
     @staticmethod
     def header() -> None:
-        _ = os.system("cls" if os.name == "nt" else "clear")
+        _ = subprocess.call("cls" if os.name == "nt" else "clear", shell=True)
         print(f"{UI.BLUE}╔══════════════════════════════════════╗")
         print(f"║ {UI.BOLD}TOONKOR DOWNLOADER v1.5.0{UI.END}{UI.BLUE}            ║")
         print(f"╚══════════════════════════════════════╝{UI.END}")
@@ -172,7 +173,7 @@ class ToonkorLogic:
         meta = cast(object, page.css('meta[name="description"]').first)
         if meta:
             meta_attrib = cast(dict[str, str], getattr(meta, "attrib", {}))
-            content = str(meta_attrib.get("content", "")).strip()
+            content = meta_attrib.get("content", "").strip()
             m_meta = re.search(
                 r"작가\s+(.+?)\s+총편수\s+총\s+\d+화\s*(.*)", content, re.DOTALL
             )
@@ -212,7 +213,7 @@ class ToonkorLogic:
         nums: set[int] = set()
 
         for a in cast(list[object], cast(object, page.css("a[href]"))):
-            href = str(cast(dict[str, str], getattr(a, "attrib", {})).get("href", ""))
+            href = cast(dict[str, str], getattr(a, "attrib", {})).get("href", "")
             m2 = chapter_pattern.search(href)
             if m2:
                 nums.add(int(m2.group(1)))
@@ -229,7 +230,7 @@ class ToonkorLogic:
                 inner = Selector(decoded, url=BASE_URL)
                 imgs = cast(list[object], cast(object, inner.css("img[src]")))
                 valid = [
-                    str(cast(dict[str, str], getattr(img, "attrib", {})).get("src", ""))
+                    cast(dict[str, str], getattr(img, "attrib", {})).get("src", "")
                     for img in imgs
                 ]
                 valid = [
@@ -262,7 +263,7 @@ class ToonkorLogic:
         candidates: list[str] = []
         for img in img_nodes:
             attrib = cast(dict[str, str], getattr(img, "attrib", {}))
-            src = str(attrib.get("src") or attrib.get("data-src") or "")
+            src = attrib.get("src") or attrib.get("data-src") or ""
             if (
                 src.startswith("https://")
                 and not any(p in src for p in self._UI_PATHS)
@@ -372,7 +373,7 @@ def _fetch_section(args: tuple[str, str]) -> tuple[str, list[dict[str, str]]]:
         items: list[dict[str, str]] = []
         for a in cast(list[object], cast(object, page.css("a[href]"))):
             attrib = cast(dict[str, str], getattr(a, "attrib", {}))
-            href = str(attrib.get("href", ""))
+            href = attrib.get("href", "")
             slug = href.strip("/")
             if not slug or slug in _NAV_SLUGS:
                 continue
@@ -543,7 +544,7 @@ def download_chapter(
         r = SESSION.get(url, timeout=(10, 15))
         if r.status_code != 200:
             return []
-        return logic.extract_images_from_chapter(str(r.text))
+        return logic.extract_images_from_chapter(r.text)
     except Exception:
         return []
 
@@ -558,7 +559,7 @@ def download_gallery(series_slug: str, logic: ToonkorLogic) -> None:
                 print(f"{UI.RED}[!] HTTP {r.status_code}{UI.END}")
                 return
             title, autor, sinopsis, chapters = logic.parse_series_page(
-                str(r.text), series_slug
+                r.text, series_slug
             )
             if not chapters:
                 chapters = []
@@ -688,7 +689,7 @@ def download_gallery(series_slug: str, logic: ToonkorLogic) -> None:
                 }
                 for _ in as_completed(futures):
                     comp += 1
-                    perc = int(30 * comp // len(imgs))
+                    perc = 30 * comp // len(imgs)
                     _ = sys.stdout.write(
                         f"\r   [{UI.CYAN}{'█' * perc}{'-' * (30 - perc)}{UI.END}] {comp}/{len(imgs)}"
                     )

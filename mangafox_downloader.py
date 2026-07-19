@@ -12,6 +12,7 @@ Uso:
 import json
 import os
 import re
+import urllib.parse
 import shutil
 import sys
 import time
@@ -128,7 +129,7 @@ def _soup(html: str) -> BeautifulSoup:
 #  BÚSQUEDA  —  /search?title=...
 # ══════════════════════════════════════════════════════════════════════════════
 def search_series(query: str) -> list:
-    url = f"{BASE_URL}/search?title={requests.utils.quote(query)}"
+    url = f"{BASE_URL}/search?title={urllib.parse.quote(query)}"
     html = fetch_html(url)
     if not html:
         return []
@@ -209,7 +210,7 @@ def _parse_manga_list(html: str) -> list:
             continue
         href = a.get("href", "")
         title = a.get_text(strip=True)
-        m = re.search(r"/manga/([^/?#]+)/?", href)
+        m = re.search(r"/manga/([^/?#]+)/?", str(href))
         if not m or not title:
             continue
         slug = m.group(1)
@@ -233,8 +234,8 @@ def _parse_manga_list(html: str) -> list:
     _ML = re.compile(r"/manga/([a-z0-9_\-]+)/?$")
     for a in soup.find_all("a", href=_ML):
         href = a.get("href", "")
-        title = (a.get("title") or a.get_text(strip=True)).strip()
-        m = _ML.search(href)
+        title = str(a.get("title") or a.get_text(strip=True)).strip()
+        m = _ML.search(str(href))
         if not m or not title or len(title) < 2:
             continue
         slug = m.group(1)
@@ -306,7 +307,7 @@ def parse_series(slug: str) -> Optional[dict]:
 
     for a in soup.find_all("a", href=_CHAP_URL_RE):
         href = a.get("href", "")
-        m = _CHAP_URL_RE.search(href)
+        m = _CHAP_URL_RE.search(str(href))
         if not m:
             continue
         vol = m.group(1) or "TBD"
@@ -314,9 +315,9 @@ def parse_series(slug: str) -> Optional[dict]:
         if chap in seen_chaps:
             continue
         seen_chaps.add(chap)
-        raw_t = (a.get("title") or "").strip()
+        raw_t = str(a.get("title") or "").strip()
         chap_title = _clean_chap_title(raw_t, title)
-        full_url = BASE_URL + href if href.startswith("/") else href
+        full_url = BASE_URL + str(href) if str(href).startswith("/") else str(href)
         chapters.append(
             {"vol": vol, "chap": chap, "title": chap_title, "url": full_url}
         )
@@ -428,7 +429,7 @@ def _page_image(page_url: str, referer: str) -> Optional[str]:
             for attr in ("data-original", "data-src", "src"):
                 src = img.get(attr, "")
                 if src and any(x in src for x in ("fmcdn", "mfcdn")):
-                    return src if src.startswith("http") else "https:" + src
+                    return str(src) if str(src).startswith("http") else "https:" + str(src)
     for m in _RE_IMGURL.finditer(html):
         src = m.group(1)
         if "/logo" not in src and "/icon" not in src:
@@ -446,7 +447,7 @@ def extract_chapter_images(chap_url: str, slug: str) -> list:
         soup = _soup(html)
         nums = set()
         for a in soup.find_all("a", href=re.compile(r"/\d+\.html$")):
-            m = re.search(r"/(\d+)\.html$", a.get("href", ""))
+            m = re.search(r"/(\d+)\.html$", str(a.get("href", "")))
             if m:
                 nums.add(int(m.group(1)))
         if nums:

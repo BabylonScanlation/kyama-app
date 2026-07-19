@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import zipfile
@@ -196,7 +197,7 @@ except (ImportError, Exception):
             try:
                 select_one = getattr(self._n, "select_one", None)
                 if callable(select_one):
-                    res = cast("object | None", select_one(res))
+                    res = cast("object | None", select_one(sel))
                     return BS4Elem(res) if res else None
                 return None
             except Exception:
@@ -282,7 +283,7 @@ class UI:
 
     @staticmethod
     def header() -> None:
-        _ = os.system("cls" if os.name == "nt" else "clear")
+        _ = subprocess.run(["cls" if os.name == "nt" else "clear"], shell=True)
         seed_status = (
             f"{UI.GREEN}✔ {len(_seeds_cache)} semillas{UI.END}"
             if _seeds_cache
@@ -295,8 +296,9 @@ class UI:
         print(f" Parser: {UI.CYAN}{parser_name}{UI.END}  Seeds: {seed_status}")
 
 
+from requests.adapters import HTTPAdapter
 SESSION = requests.Session()
-adapter = requests.adapters.HTTPAdapter(
+adapter = HTTPAdapter(
     pool_connections=MAX_WORKERS_DL, pool_maxsize=MAX_WORKERS_DL
 )
 SESSION.mount("http://", adapter)
@@ -843,7 +845,7 @@ class DumanwuLogic:
 
 # ─── DESCARGA ─────────────────────────────────────────────────────────────────
 def save_img(raw: bytes, path: str, fmt: str) -> None:
-    if not has_pillow or str(fmt) == "original" or Image is None:
+    if not has_pillow or fmt == "original" or Image is None:
         with open(path, "wb") as f:
             _ = f.write(raw)
         return
@@ -986,7 +988,7 @@ def download_series(slug: str, logic: DumanwuLogic):
                 comp += 1
                 if fut.result():
                     valid += 1
-                perc = int(30 * comp // len(imgs))
+                perc = 30 * comp // len(imgs)
                 _ = sys.stdout.write(
                     f"\r   [{UI.CYAN}{'█' * perc}{'-' * (30 - perc)}{UI.END}] {comp}/{len(imgs)}"
                 )
@@ -1029,7 +1031,7 @@ def download_series(slug: str, logic: DumanwuLogic):
                     comp += 1
                     if fut.result():
                         valid += 1
-                    perc = int(30 * comp // len(imgs))
+                    perc = 30 * comp // len(imgs)
                     _ = sys.stdout.write(
                         f"\r   [{UI.CYAN}{'█' * perc}{'-' * (30 - perc)}{UI.END}] {comp}/{len(imgs)}"
                     )

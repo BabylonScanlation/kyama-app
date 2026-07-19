@@ -161,7 +161,7 @@ def _parse_cards(html: str) -> list:
     seen = set()
 
     for a in soup.find_all("a", href=re.compile(r"/manga/([^/?#]+)/?$")):
-        href = a.get("href", "").rstrip("/")
+        href = str(a.get("href", "")).rstrip("/")
         slug = href.split("/")[-1]
         if slug in seen or slug == "get":
             continue
@@ -229,7 +229,7 @@ def get_chapter_list(mid: str) -> list:
     soup = _soup(html)
     chapters = []
     for a in soup.find_all("a", href=True):
-        href = a["href"]
+        href = str(a["href"])
         title = a.get_text(strip=True)
         if not title or "javascript" in href or title in ["排序", "最新章節"]:
             continue
@@ -259,7 +259,7 @@ def extract_chapter_images(chap_url: str) -> list:
 
     for img in soup.find_all("img"):
         for attr in ("data-src", "data-original", "data-lazy-src", "src"):
-            u = img.get(attr, "")
+            u = str(img.get(attr, ""))
             if u and not u.startswith("data:") and _valid_img(u):
                 if not u.startswith("http"):
                     u = urljoin(SITE_URL, u)
@@ -612,7 +612,8 @@ def fetch_all_series() -> list:
     soup1 = _soup(html1)
     # Buscar el número más alto en los links de paginación
     for a in soup1.find_all("a", href=re.compile(r"/manga/page/(\d+)")):
-        m = re.search(r"/manga/page/(\d+)", a["href"])
+        a_href = str(a.get("href", ""))
+        m = re.search(r"/manga/page/(\d+)", a_href)
         if m:
             total_pages = max(total_pages, int(m.group(1)))
 
@@ -737,7 +738,7 @@ def check_deps() -> None:
     except ImportError:
         missing.append("beautifulsoup4")
     try:
-        import lxml
+        import lxml  # type: ignore
     except ImportError:
         missing.append("lxml")
     if missing:
